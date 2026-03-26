@@ -19,8 +19,9 @@ COPY agent/ agent/
 COPY scripts/ scripts/
 COPY data/ data/
 
-# Build the ChromaDB collection (requires internet access at build time)
-RUN python scripts/ingest.py
+# Build the ChromaDB collection (requires internet access at build time).
+# --wiki-only skips the GitHub zip download which can be slow/flaky in CI.
+RUN python scripts/ingest.py --wiki-only
 
 # ---------------------------------------------------------------------------
 # Stage 2 — Application
