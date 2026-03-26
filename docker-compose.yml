@@ -1,0 +1,22 @@
+services:
+  freecad-agent:
+    image: freecad-agent:latest
+    build: .
+    ports:
+      - "8501:8501"
+    volumes:
+      # Persist user config (API key, provider, model) across container restarts
+      - "${USERPROFILE:-~}/.freecad-agent:/root/.freecad-agent"
+      # Persist LangGraph session state (conversation history)
+      - freecad-agent-checkpoints:/app/checkpoints.db
+    environment:
+      # Override FreeCAD host if needed (default: host.docker.internal for Windows/Mac)
+      - FREECAD_HOST=${FREECAD_HOST:-host.docker.internal}
+      - FREECAD_PORT=${FREECAD_PORT:-65432}
+    # Linux only: allows container to reach host.docker.internal equivalent
+    extra_hosts:
+      - "host-gateway:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  freecad-agent-checkpoints:
