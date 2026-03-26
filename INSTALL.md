@@ -29,7 +29,7 @@ Get the AI assistant running in 3 steps.
 Open a terminal and run:
 
 ```bash
-docker run -p 8501:8501 \
+docker run --pull=always -p 8501:8501 \
   -v "%USERPROFILE%\.freecad-agent:/root/.freecad-agent" \
   ghcr.io/areddy03/freecad-agent:latest
 ```
