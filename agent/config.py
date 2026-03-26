@@ -13,6 +13,7 @@ CONFIG_PATH = Path.home() / ".freecad-agent" / "config.json"
 PROVIDER_MODELS: dict[str, list[str]] = {
     "anthropic": ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
     "openai":    ["gpt-4o", "gpt-4o-mini"],
+    "google":    ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-pro"],
     "ollama":    [],  # populated dynamically at runtime via ollama list
 }
 

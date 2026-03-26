@@ -24,6 +24,12 @@ def get_llm(config: UserConfig) -> BaseChatModel:
                 api_key=config.api_key,
                 streaming=True,
             )
+        case "google":
+            from langchain_google_genai import ChatGoogleGenerativeAI
+            return ChatGoogleGenerativeAI(
+                model=config.model,
+                google_api_key=config.api_key,
+            )
         case "ollama":
             from langchain_ollama import ChatOllama
             # Ollama runs locally — no API key, no streaming flag needed
