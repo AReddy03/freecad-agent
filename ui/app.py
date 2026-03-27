@@ -188,62 +188,7 @@ def _get_graph():
 
 
 # ---------------------------------------------------------------------------
-# Main layout — chat on left, screenshot on right
-# ---------------------------------------------------------------------------
-
-chat_col, view_col = st.columns([3, 2])
-
-with view_col:
-    st.subheader("3D View")
-    screenshot_placeholder = st.empty()
-    if st.session_state.last_screenshot:
-        png = base64.b64decode(st.session_state.last_screenshot)
-        screenshot_placeholder.image(png, use_container_width=True)
-    else:
-        screenshot_placeholder.info("Screenshot will appear here after each operation.")
-
-    st.subheader("Scene Objects")
-    objects_placeholder = st.empty()
-
-with chat_col:
-    st.subheader("Chat")
-
-    # Config guard
-    cfg = load_config()
-    if not cfg.is_ready:
-        st.warning(
-            "No LLM configured. Open **Settings** in the sidebar, "
-            "enter your API key, and click **Save Settings**."
-        )
-        st.stop()
-
-    # Render conversation history
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-            if msg.get("screenshot"):
-                png = base64.b64decode(msg["screenshot"])
-                st.image(png, use_container_width=True)
-
-    # Confirmation UI (shown when graph is interrupted)
-    if st.session_state.pending_confirmation:
-        st.warning(st.session_state.messages[-1]["content"])
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("Yes, proceed", type="primary", use_container_width=True):
-                _run_graph("yes")
-        with c2:
-            if st.button("No, cancel", use_container_width=True):
-                _run_graph("no")
-        st.stop()
-
-    # Chat input
-    if prompt := st.chat_input("Ask FreeCAD to do something…"):
-        _run_graph(prompt)
-
-
-# ---------------------------------------------------------------------------
-# Graph runner
+# Graph runner  (defined before layout so calls below can reference it)
 # ---------------------------------------------------------------------------
 
 def _run_graph(user_input: str):
@@ -349,3 +294,58 @@ def _refresh_objects():
             objects_placeholder.info("Document is empty.")
     except Exception:
         objects_placeholder.warning("Could not refresh object list.")
+
+
+# ---------------------------------------------------------------------------
+# Main layout — chat on left, screenshot on right
+# ---------------------------------------------------------------------------
+
+chat_col, view_col = st.columns([3, 2])
+
+with view_col:
+    st.subheader("3D View")
+    screenshot_placeholder = st.empty()
+    if st.session_state.last_screenshot:
+        png = base64.b64decode(st.session_state.last_screenshot)
+        screenshot_placeholder.image(png, use_container_width=True)
+    else:
+        screenshot_placeholder.info("Screenshot will appear here after each operation.")
+
+    st.subheader("Scene Objects")
+    objects_placeholder = st.empty()
+
+with chat_col:
+    st.subheader("Chat")
+
+    # Config guard
+    cfg = load_config()
+    if not cfg.is_ready:
+        st.warning(
+            "No LLM configured. Open **Settings** in the sidebar, "
+            "enter your API key, and click **Save Settings**."
+        )
+        st.stop()
+
+    # Render conversation history
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            if msg.get("screenshot"):
+                png = base64.b64decode(msg["screenshot"])
+                st.image(png, use_container_width=True)
+
+    # Confirmation UI (shown when graph is interrupted)
+    if st.session_state.pending_confirmation:
+        st.warning(st.session_state.messages[-1]["content"])
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Yes, proceed", type="primary", use_container_width=True):
+                _run_graph("yes")
+        with c2:
+            if st.button("No, cancel", use_container_width=True):
+                _run_graph("no")
+        st.stop()
+
+    # Chat input
+    if prompt := st.chat_input("Ask FreeCAD to do something…"):
+        _run_graph(prompt)
