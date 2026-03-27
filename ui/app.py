@@ -60,10 +60,11 @@ with st.sidebar:
     config: UserConfig = load_config()
 
     # Provider selector
+    _providers = [p for p in PROVIDER_MODELS if p != "ollama"] + ["ollama"]
     provider = st.selectbox(
         "Provider",
-        options=["anthropic", "openai", "ollama"],
-        index=["anthropic", "openai", "ollama"].index(config.provider),
+        options=_providers,
+        index=_providers.index(config.provider) if config.provider in _providers else 0,
         key="provider_select",
     )
 
@@ -85,12 +86,17 @@ with st.sidebar:
 
     # API key (hidden for Ollama)
     api_key = config.api_key
+    _placeholders = {
+        "anthropic": "sk-ant-...",
+        "openai":    "sk-...",
+        "google":    "AIza...",
+    }
     if provider != "ollama":
         api_key = st.text_input(
             "API Key",
             value=config.api_key,
             type="password",
-            placeholder="Paste your API key here",
+            placeholder=_placeholders.get(provider, "Paste your API key here"),
         )
 
     # FreeCAD connection
