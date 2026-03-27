@@ -8,6 +8,7 @@ Graph topology:
                               └─► END
 """
 
+import sqlite3
 from pathlib import Path
 from typing import Annotated
 
@@ -164,5 +165,6 @@ def build_graph(config: UserConfig, rag_tool=None):
     g.add_edge("run_tools", "reason")
     g.add_edge("confirm_and_run", "reason")
 
-    checkpointer = SqliteSaver.from_conn_string(str(CHECKPOINTS_PATH))
+    conn = sqlite3.connect(str(CHECKPOINTS_PATH), check_same_thread=False)
+    checkpointer = SqliteSaver(conn)
     return g.compile(checkpointer=checkpointer, interrupt_before=["confirm_and_run"])
