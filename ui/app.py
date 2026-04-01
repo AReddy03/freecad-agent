@@ -172,6 +172,23 @@ with st.sidebar:
         st.session_state.graph = None
         st.rerun()
 
+    if st.button("Clear Document", use_container_width=True):
+        try:
+            cfg = load_config()
+            from agent.freecad_client import FreeCADClient
+            c = FreeCADClient(host=cfg.freecad_host, port=cfg.freecad_port)
+            c.connect()
+            c.clear_document()
+            c.disconnect()
+            st.success("Document cleared.")
+        except Exception as e:
+            st.error(f"Could not clear document: {e}")
+        # New thread forces a fresh feature_tree in graph state
+        st.session_state.thread_id = str(uuid.uuid4())
+        st.session_state.graph = None
+        st.session_state.last_screenshot = None
+        st.rerun()
+
 # ---------------------------------------------------------------------------
 # Lazy graph initialisation
 # ---------------------------------------------------------------------------

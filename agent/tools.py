@@ -76,6 +76,24 @@ def make_freecad_tools(config: UserConfig) -> list:
             return f"CONNECTION ERROR: {e}"
 
     @tool
+    def get_feature_tree() -> str:
+        """Return the current FreeCAD document object tree as a structured list.
+        Reads live state directly from FreeCAD — use this before any operation
+        that references existing geometry (fillet, chamfer, boolean, pocket,
+        mirror, or any face/edge/body you did not create in the current turn)."""
+        try:
+            client = _get_client(config)
+            objects = client.list_objects()
+            if not objects:
+                return "Current document is empty — no objects exist."
+            lines = ["Current FreeCAD document objects:"]
+            for i, o in enumerate(objects, 1):
+                lines.append(f"  {i}. {o['name']} ({o['label']}) [{o['type']}]")
+            return "\n".join(lines)
+        except FreeCADConnectionError as e:
+            return f"CONNECTION ERROR: {e}"
+
+    @tool
     def clear_document() -> str:
         """Remove ALL objects from the active FreeCAD document.
         *** DESTRUCTIVE — the safety system will ask the user to confirm before this runs. ***"""
@@ -105,4 +123,5 @@ def make_freecad_tools(config: UserConfig) -> list:
         except RuntimeError as e:
             return f"FREECAD ERROR: {e}"
 
-    return [execute_script, get_screenshot, list_objects, clear_document, save_document]
+    return [execute_script, get_screenshot, list_objects, get_feature_tree,
+            clear_document, save_document]
