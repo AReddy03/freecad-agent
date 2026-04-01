@@ -132,6 +132,11 @@ class FreeCADClient:
 
     def clear_document(self) -> None:
         self._call("clear_document")
+        # clear_document may leave App.ActiveDocument as None in some FreeCAD
+        # versions. Ensure a document exists before the next script runs.
+        self.execute_script(
+            "if App.ActiveDocument is None: App.newDocument('TestDoc')"
+        )
 
     def save_document(self, path: str = "") -> str:
         result = self._call("save_document", {"path": path})
