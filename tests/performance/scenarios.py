@@ -54,15 +54,15 @@ BASIC_GEOMETRY: list[TestCase] = [
         verifications=[
             ObjectCheck(name_contains="Box", type_contains="Part::Box"),
             GeometryCheck(
-                script="obj = App.ActiveDocument.getObject('Box'); print(obj.Length.Value)",
+                script="obj = next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Box'), None); print(obj.Length.Value if obj else 'NOT_FOUND')",
                 expected=50.0,
             ),
             GeometryCheck(
-                script="obj = App.ActiveDocument.getObject('Box'); print(obj.Width.Value)",
+                script="obj = next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Box'), None); print(obj.Width.Value if obj else 'NOT_FOUND')",
                 expected=30.0,
             ),
             GeometryCheck(
-                script="obj = App.ActiveDocument.getObject('Box'); print(obj.Height.Value)",
+                script="obj = next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Box'), None); print(obj.Height.Value if obj else 'NOT_FOUND')",
                 expected=10.0,
             ),
         ],
@@ -76,11 +76,11 @@ BASIC_GEOMETRY: list[TestCase] = [
         verifications=[
             ObjectCheck(name_contains="Cylinder", type_contains="Part::Cylinder"),
             GeometryCheck(
-                script="obj = App.ActiveDocument.getObject('Cylinder'); print(obj.Radius.Value)",
+                script="obj = next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Cylinder'), None); print(obj.Radius.Value if obj else 'NOT_FOUND')",
                 expected=20.0,
             ),
             GeometryCheck(
-                script="obj = App.ActiveDocument.getObject('Cylinder'); print(obj.Height.Value)",
+                script="obj = next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Cylinder'), None); print(obj.Height.Value if obj else 'NOT_FOUND')",
                 expected=40.0,
             ),
         ],
@@ -94,7 +94,7 @@ BASIC_GEOMETRY: list[TestCase] = [
         verifications=[
             ObjectCheck(name_contains="Sphere", type_contains="Part::Sphere"),
             GeometryCheck(
-                script="obj = App.ActiveDocument.getObject('Sphere'); print(obj.Radius.Value)",
+                script="obj = next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Sphere'), None); print(obj.Radius.Value if obj else 'NOT_FOUND')",
                 expected=15.0,
             ),
         ],
@@ -108,11 +108,11 @@ BASIC_GEOMETRY: list[TestCase] = [
         verifications=[
             ObjectCheck(name_contains="Cone", type_contains="Part::Cone"),
             GeometryCheck(
-                script="obj = App.ActiveDocument.getObject('Cone'); print(obj.Radius1.Value)",
+                script="obj = next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Cone'), None); print(obj.Radius1.Value if obj else 'NOT_FOUND')",
                 expected=20.0,
             ),
             GeometryCheck(
-                script="obj = App.ActiveDocument.getObject('Cone'); print(obj.Height.Value)",
+                script="obj = next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Cone'), None); print(obj.Height.Value if obj else 'NOT_FOUND')",
                 expected=30.0,
             ),
         ],
@@ -125,11 +125,11 @@ BASIC_GEOMETRY: list[TestCase] = [
         verifications=[
             ObjectCheck(name_contains="Torus", type_contains="Part::Torus"),
             GeometryCheck(
-                script="obj = App.ActiveDocument.getObject('Torus'); print(obj.Radius1.Value)",
+                script="obj = next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Torus'), None); print(obj.Radius1.Value if obj else 'NOT_FOUND')",
                 expected=30.0,
             ),
             GeometryCheck(
-                script="obj = App.ActiveDocument.getObject('Torus'); print(obj.Radius2.Value)",
+                script="obj = next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Torus'), None); print(obj.Radius2.Value if obj else 'NOT_FOUND')",
                 expected=10.0,
             ),
         ],
@@ -250,11 +250,11 @@ App.ActiveDocument.recompute()
 """,
         verifications=[
             GeometryCheck(
-                script="obj = App.ActiveDocument.getObject('Box'); print(obj.Length.Value)",
+                script="obj = next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Box'), None); print(obj.Length.Value if obj else 'NOT_FOUND')",
                 expected=80.0,
             ),
             GeometryCheck(
-                script="obj = App.ActiveDocument.getObject('Box'); print(obj.Height.Value)",
+                script="obj = next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Box'), None); print(obj.Height.Value if obj else 'NOT_FOUND')",
                 expected=25.0,
             ),
         ],

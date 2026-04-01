@@ -39,6 +39,8 @@ def verify_geometry(check: GeometryCheck, execute_fn) -> tuple[bool, str]:
     """Run a FreeCAD script and compare the printed output to expected."""
     try:
         raw = execute_fn(check.script).strip()
+        if raw == "NOT_FOUND":
+            return False, "Object not found in document (NOT_FOUND)"
         if isinstance(check.expected, str):
             passed = raw == check.expected
             return passed, f"got={raw!r} expected={check.expected!r}"
