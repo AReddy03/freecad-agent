@@ -208,9 +208,20 @@ def _get_graph():
 # Graph runner  (defined before layout so calls below can reference it)
 # ---------------------------------------------------------------------------
 
+_TOOL_LABELS = {
+    "execute_script":  "⚙️ Executing script",
+    "get_screenshot":  "📸 Taking screenshot",
+    "list_objects":    "🔍 Listing objects",
+    "get_feature_tree": "🌳 Checking feature tree",
+    "rag_search":      "📚 Searching docs",
+    "clear_document":  "🗑️ Clearing document",
+    "save_document":   "💾 Saving document",
+}
+
+
 def _run_graph(user_input: str):
     """Invoke the graph with user_input and update session state."""
-    from langchain_core.messages import HumanMessage
+    from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 
     graph = _get_graph()
     if not graph:
@@ -229,48 +240,77 @@ def _run_graph(user_input: str):
     with st.chat_message("assistant"):
         text_placeholder = st.empty()
 
-        try:
-            for event in graph.stream(input_payload, config=run_config, stream_mode="values"):
-                state = event
+        with st.status("Agent running…", expanded=True) as agent_status:
+            try:
+                for event in graph.stream(input_payload, config=run_config, stream_mode="updates"):
+                    # event is {node_name: state_updates}
+                    for node_name, state_updates in event.items():
+                        if node_name == "reason":
+                            msgs = state_updates.get("messages", [])
+                            if msgs:
+                                last = msgs[-1]
+                                if isinstance(last, AIMessage):
+                                    tool_calls = getattr(last, "tool_calls", [])
+                                    if tool_calls:
+                                        names = ", ".join(
+                                            _TOOL_LABELS.get(tc["name"], tc["name"])
+                                            for tc in tool_calls
+                                        )
+                                        agent_status.write(f"🤔 Planning → {names}")
+                                    else:
+                                        content = last.content
+                                        if isinstance(content, str) and content:
+                                            assistant_text = content
+                                            text_placeholder.markdown(assistant_text + "▌")
+                                            agent_status.write("🤔 Thinking…")
 
-                # Stream assistant tokens
-                msgs = state.get("messages", [])
-                if msgs:
-                    last = msgs[-1]
-                    role = getattr(last, "type", "")
-                    if role == "ai":
-                        content = last.content
-                        if isinstance(content, str) and content:
-                            assistant_text = content
-                            text_placeholder.markdown(assistant_text + "▌")
+                        elif node_name in ("run_tools", "confirm_and_run"):
+                            msgs = state_updates.get("messages", [])
+                            for msg in msgs:
+                                if isinstance(msg, ToolMessage):
+                                    label = _TOOL_LABELS.get(
+                                        getattr(msg, "name", ""), f"🔧 {getattr(msg, 'name', 'tool')}"
+                                    )
+                                    preview = (msg.content or "")[:80]
+                                    if len(msg.content or "") > 80:
+                                        preview += "…"
+                                    agent_status.write(f"{label} → {preview}")
+                            # Capture screenshot updates
+                            if state_updates.get("last_screenshot"):
+                                new_screenshot = state_updates["last_screenshot"]
+                                png = base64.b64decode(new_screenshot)
+                                screenshot_placeholder.image(png, use_container_width=True)
 
-                # Capture screenshot updates
-                if state.get("last_screenshot"):
-                    new_screenshot = state["last_screenshot"]
-                    png = base64.b64decode(new_screenshot)
-                    screenshot_placeholder.image(png, use_container_width=True)
+                        elif node_name == "post_tool":
+                            new_entries = state_updates.get("feature_tree", [])
+                            if new_entries:
+                                agent_status.write(f"📝 +{len(new_entries)} object(s) added to feature tree")
 
-        except Exception as e:
-            error_str = str(e)
-            # LangGraph raises when the graph hits an interrupt
-            if "interrupt" in error_str.lower() or "GraphInterrupt" in type(e).__name__:
-                # Extract the confirmation question from graph state
-                current_state = graph.get_state(run_config)
-                interrupts = current_state.tasks
-                question = "Confirm this action?"
-                for task in interrupts:
-                    for iv in getattr(task, "interrupts", []):
-                        if isinstance(iv.value, dict):
-                            question = iv.value.get("question", question)
-                        elif isinstance(iv.value, str):
-                            question = iv.value
-                st.session_state.messages.append({"role": "assistant", "content": question})
-                st.session_state.pending_confirmation = True
-                st.rerun()
-                return
-            else:
-                st.error(f"Agent error: {e}")
-                return
+            except Exception as e:
+                error_str = str(e)
+                # LangGraph raises when the graph hits an interrupt
+                if "interrupt" in error_str.lower() or "GraphInterrupt" in type(e).__name__:
+                    agent_status.update(label="⏸️ Waiting for confirmation", state="complete")
+                    # Extract the confirmation question from graph state
+                    current_state = graph.get_state(run_config)
+                    interrupts = current_state.tasks
+                    question = "Confirm this action?"
+                    for task in interrupts:
+                        for iv in getattr(task, "interrupts", []):
+                            if isinstance(iv.value, dict):
+                                question = iv.value.get("question", question)
+                            elif isinstance(iv.value, str):
+                                question = iv.value
+                    st.session_state.messages.append({"role": "assistant", "content": question})
+                    st.session_state.pending_confirmation = True
+                    st.rerun()
+                    return
+                else:
+                    agent_status.update(label=f"Error: {e}", state="error")
+                    st.error(f"Agent error: {e}")
+                    return
+
+            agent_status.update(label="Done ✓", state="complete")
 
         # Final text
         text_placeholder.markdown(assistant_text)
