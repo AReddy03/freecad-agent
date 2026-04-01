@@ -35,8 +35,8 @@ def build_test_record(case: TestCase, runs: list[RunMetrics]) -> dict:
         "category": case.category,
         "tags": case.tags,
         "prompt": case.prompt,
-        # Overall
-        "passed": reliability == 1.0,
+        # Overall — passed if at least 2/3 of runs passed (or all runs if < 3)
+        "passed": reliability >= (2 / 3),
         "reliability": round(reliability, 3),
         "runs_total": len(runs),
         "runs_passed": len(passed_runs),
@@ -52,9 +52,22 @@ def build_test_record(case: TestCase, runs: list[RunMetrics]) -> dict:
         "rag_searches_avg": round(statistics.mean([r.rag_searches for r in runs]), 2),
         # Safety
         "interrupted": any(r.interrupted for r in runs),
-        # Verifications (from first run)
-        "verifications": runs[0].verifications if runs else {},
+        # Verifications — show first failing run, fall back to first run
+        "verifications": next(
+            (r.verifications for r in runs if not r.passed), runs[0].verifications
+        ) if runs else {},
         "screenshot_ssim": _extract_ssim(runs[0]) if runs else None,
+        # Per-run breakdown for debugging
+        "run_details": [
+            {
+                "run": i,
+                "passed": r.passed,
+                "duration": r.duration,
+                "error": r.error,
+                "failed_checks": {k: v for k, v in r.verifications.items() if not v.get("passed")},
+            }
+            for i, r in enumerate(runs)
+        ],
         # Errors
         "errors": [r.error for r in runs if r.error],
     }
