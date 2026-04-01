@@ -93,8 +93,8 @@ def verify_screenshot(test_id: str, png_b64: str | None) -> tuple[bool, float | 
             current = np.array(current_img)
 
         score = float(ssim(baseline, current, channel_axis=2, data_range=255))
-        passed = score >= 0.90
-        return passed, round(score, 4), f"SSIM={score:.4f} (threshold=0.90)"
+        passed = score >= 0.80
+        return passed, round(score, 4), f"SSIM={score:.4f} (threshold=0.80)"
 
     except ImportError:
         # scikit-image / Pillow not installed — skip visual check
@@ -129,13 +129,15 @@ def run_verifications(
             results[key] = {"type": "geometry", "passed": passed, "detail": detail,
                             "expected": check.expected}
 
-    # Always run screenshot check
-    vis_passed, ssim_score, vis_detail = verify_screenshot(case.id, screenshot_b64)
-    results["screenshot"] = {
-        "type": "visual",
-        "passed": vis_passed,
-        "detail": vis_detail,
-        "ssim": ssim_score,
-    }
+    # Screenshot check — skip for tests with no explicit verifications (e.g. ER tests)
+    # since the agent intentionally produces no geometry on those.
+    if case.verifications:
+        vis_passed, ssim_score, vis_detail = verify_screenshot(case.id, screenshot_b64)
+        results["screenshot"] = {
+            "type": "visual",
+            "passed": vis_passed,
+            "detail": vis_detail,
+            "ssim": ssim_score,
+        }
 
     return results

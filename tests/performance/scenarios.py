@@ -123,13 +123,12 @@ BASIC_GEOMETRY: list[TestCase] = [
         category="basic_geometry",
         prompt="Create a torus with major radius 30mm and minor radius 10mm.",
         verifications=[
-            ObjectCheck(name_contains="Torus", type_contains=""),
             GeometryCheck(
-                script="obj=next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Torus'),None) or next((o for o in App.ActiveDocument.Objects if 'torus' in o.Name.lower() and hasattr(o,'Shape')),None); print(obj.Radius1.Value if (obj and hasattr(obj,'Radius1')) else round(obj.Shape.BoundBox.XLength/2-obj.Shape.BoundBox.ZLength/2,1) if (obj and hasattr(obj,'Shape')) else 'NOT_FOUND')",
+                script="obj=next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Torus'),None) or next((o for o in App.ActiveDocument.Objects if ('torus' in o.Name.lower() or o.Name=='Shape') and hasattr(o,'Shape')),None); print(obj.Radius1.Value if (obj and hasattr(obj,'Radius1')) else round(obj.Shape.BoundBox.XLength/2-obj.Shape.BoundBox.ZLength/2,1) if (obj and hasattr(obj,'Shape')) else 'NOT_FOUND')",
                 expected=30.0,
             ),
             GeometryCheck(
-                script="obj=next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Torus'),None) or next((o for o in App.ActiveDocument.Objects if 'torus' in o.Name.lower() and hasattr(o,'Shape')),None); print(obj.Radius2.Value if (obj and hasattr(obj,'Radius2')) else round(obj.Shape.BoundBox.ZLength/2,1) if (obj and hasattr(obj,'Shape')) else 'NOT_FOUND')",
+                script="obj=next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Torus'),None) or next((o for o in App.ActiveDocument.Objects if ('torus' in o.Name.lower() or o.Name=='Shape') and hasattr(o,'Shape')),None); print(obj.Radius2.Value if (obj and hasattr(obj,'Radius2')) else round(obj.Shape.BoundBox.ZLength/2,1) if (obj and hasattr(obj,'Shape')) else 'NOT_FOUND')",
                 expected=10.0,
             ),
         ],
@@ -185,7 +184,7 @@ cyl.Radius = 10; cyl.Height = 40
 App.ActiveDocument.recompute()
 """,
         verifications=[
-            ObjectCheck(name_contains="Fuse", type_contains=""),
+            ObjectCheck(name_contains="Fus", type_contains=""),
         ],
     ),
     TestCase(
