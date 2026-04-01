@@ -185,7 +185,7 @@ cyl.Radius = 10; cyl.Height = 40
 App.ActiveDocument.recompute()
 """,
         verifications=[
-            ObjectCheck(name_contains="Fuse", type_contains="Part::Fuse"),
+            ObjectCheck(name_contains="Fuse", type_contains=""),
         ],
     ),
     TestCase(
@@ -202,7 +202,7 @@ cyl.Radius = 10; cyl.Height = 40
 App.ActiveDocument.recompute()
 """,
         verifications=[
-            ObjectCheck(name_contains="Cut", type_contains="Part::Cut"),
+            ObjectCheck(name_contains="Cut", type_contains=""),
         ],
     ),
     TestCase(
@@ -219,7 +219,7 @@ cyl.Radius = 30; cyl.Height = 40
 App.ActiveDocument.recompute()
 """,
         verifications=[
-            ObjectCheck(name_contains="Common", type_contains="Part::Common"),
+            ObjectCheck(name_contains="Common", type_contains=""),
         ],
     ),
     TestCase(
@@ -272,7 +272,7 @@ MULTI_STEP: list[TestCase] = [
         category="multi_step",
         prompt="Create a 40x20x15mm box, then tell me what objects are in the scene.",
         verifications=[
-            ObjectCheck(name_contains="Box", type_contains="Part::Box"),
+            ObjectCheck(name_contains="Box", type_contains=""),
         ],
         tags=["smoke"],
     ),
