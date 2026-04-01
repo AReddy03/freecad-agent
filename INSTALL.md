@@ -28,15 +28,23 @@ Get the AI assistant running in 3 steps.
 
 Open a terminal and run:
 
+**Windows (PowerShell or CMD):**
 ```bash
-docker run --pull=always -p 8501:8501 \
-  -v "%USERPROFILE%\.freecad-agent:/root/.freecad-agent" \
+docker run --pull=always -p 8501:8501 ^
+  --add-host=host.docker.internal:host-gateway ^
+  -v "%USERPROFILE%\.freecad-agent:/root/.freecad-agent" ^
   ghcr.io/areddy03/freecad-agent:latest
 ```
 
-> Replace `<YOUR-GITHUB-USERNAME>` with your GitHub username. The image is published automatically when you push a version tag (e.g. `v1.0.0`).
+**macOS / Linux:**
+```bash
+docker run --pull=always -p 8501:8501 \
+  --add-host=host.docker.internal:host-gateway \
+  -v "$HOME/.freecad-agent:/root/.freecad-agent" \
+  ghcr.io/areddy03/freecad-agent:latest
+```
 
-**Linux users:** add `--add-host=host-gateway:host-gateway` and set `FREECAD_HOST=host-gateway` in Settings.
+> After starting, open Settings and set **FreeCAD Host** to `host.docker.internal` (not `127.0.0.1`). Docker containers cannot reach the host machine via `127.0.0.1`.
 
 ---
 
