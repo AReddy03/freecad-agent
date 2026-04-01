@@ -64,6 +64,8 @@ def build_test_record(case: TestCase, runs: list[RunMetrics]) -> dict:
                 "passed": r.passed,
                 "duration": r.duration,
                 "error": r.error,
+                "agent_scripts": r.agent_scripts,
+                "tool_results": r.tool_results,
                 "failed_checks": {k: v for k, v in r.verifications.items() if not v.get("passed")},
             }
             for i, r in enumerate(runs)

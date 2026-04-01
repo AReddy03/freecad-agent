@@ -33,6 +33,8 @@ class RunMetrics:
     error: str | None = None
     screenshot_b64: str | None = None
     verifications: dict = field(default_factory=dict)
+    agent_scripts: list[str] = field(default_factory=list)   # code the agent ran
+    tool_results: list[str] = field(default_factory=list)    # FreeCAD responses
 
 
 def run_test(case: TestCase, config: UserConfig | None = None) -> RunMetrics:
@@ -167,12 +169,17 @@ def _analyse_messages(messages: list, metrics: RunMetrics) -> None:
                     metrics.execute_script_calls += 1
                     if prev_had_error:
                         metrics.self_corrections += 1
+                    # Capture the script code the agent ran
+                    code = tc.get("args", {}).get("code", "")
+                    if code:
+                        metrics.agent_scripts.append(code.strip())
                 if tc["name"] == "rag_search":
                     metrics.rag_searches += 1
             prev_had_error = False
 
         elif isinstance(msg, ToolMessage):
             content = msg.content or ""
+            metrics.tool_results.append(content[:300])  # truncate long outputs
             prev_had_error = "FREECAD ERROR" in content or "CONNECTION ERROR" in content
 
 
