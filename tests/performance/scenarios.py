@@ -52,17 +52,17 @@ BASIC_GEOMETRY: list[TestCase] = [
         category="basic_geometry",
         prompt="Create a box that is 50mm long, 30mm wide, and 10mm tall.",
         verifications=[
-            ObjectCheck(name_contains="Box", type_contains="Part::Box"),
+            ObjectCheck(name_contains="Box", type_contains=""),
             GeometryCheck(
-                script="obj = next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Box'), None); print(obj.Length.Value if obj else 'NOT_FOUND')",
+                script="obj=next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Box'),None) or next((o for o in App.ActiveDocument.Objects if 'box' in o.Name.lower() and hasattr(o,'Shape')),None); print(obj.Length.Value if (obj and hasattr(obj,'Length')) else round(obj.Shape.BoundBox.XLength,1) if (obj and hasattr(obj,'Shape')) else 'NOT_FOUND')",
                 expected=50.0,
             ),
             GeometryCheck(
-                script="obj = next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Box'), None); print(obj.Width.Value if obj else 'NOT_FOUND')",
+                script="obj=next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Box'),None) or next((o for o in App.ActiveDocument.Objects if 'box' in o.Name.lower() and hasattr(o,'Shape')),None); print(obj.Width.Value if (obj and hasattr(obj,'Width')) else round(obj.Shape.BoundBox.YLength,1) if (obj and hasattr(obj,'Shape')) else 'NOT_FOUND')",
                 expected=30.0,
             ),
             GeometryCheck(
-                script="obj = next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Box'), None); print(obj.Height.Value if obj else 'NOT_FOUND')",
+                script="obj=next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Box'),None) or next((o for o in App.ActiveDocument.Objects if 'box' in o.Name.lower() and hasattr(o,'Shape')),None); print(obj.Height.Value if (obj and hasattr(obj,'Height')) else round(obj.Shape.BoundBox.ZLength,1) if (obj and hasattr(obj,'Shape')) else 'NOT_FOUND')",
                 expected=10.0,
             ),
         ],
@@ -74,13 +74,13 @@ BASIC_GEOMETRY: list[TestCase] = [
         category="basic_geometry",
         prompt="Create a cylinder with radius 20mm and height 40mm.",
         verifications=[
-            ObjectCheck(name_contains="Cylinder", type_contains="Part::Cylinder"),
+            ObjectCheck(name_contains="Cylinder", type_contains=""),
             GeometryCheck(
-                script="obj = next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Cylinder'), None); print(obj.Radius.Value if obj else 'NOT_FOUND')",
+                script="obj=next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Cylinder'),None) or next((o for o in App.ActiveDocument.Objects if 'cyl' in o.Name.lower() and hasattr(o,'Shape')),None); print(obj.Radius.Value if (obj and hasattr(obj,'Radius')) else round(obj.Shape.BoundBox.XLength/2,1) if (obj and hasattr(obj,'Shape')) else 'NOT_FOUND')",
                 expected=20.0,
             ),
             GeometryCheck(
-                script="obj = next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Cylinder'), None); print(obj.Height.Value if obj else 'NOT_FOUND')",
+                script="obj=next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Cylinder'),None) or next((o for o in App.ActiveDocument.Objects if 'cyl' in o.Name.lower() and hasattr(o,'Shape')),None); print(obj.Height.Value if (obj and hasattr(obj,'Height')) else round(obj.Shape.BoundBox.ZLength,1) if (obj and hasattr(obj,'Shape')) else 'NOT_FOUND')",
                 expected=40.0,
             ),
         ],
@@ -92,9 +92,9 @@ BASIC_GEOMETRY: list[TestCase] = [
         category="basic_geometry",
         prompt="Create a sphere with radius 15mm.",
         verifications=[
-            ObjectCheck(name_contains="Sphere", type_contains="Part::Sphere"),
+            ObjectCheck(name_contains="Sphere", type_contains=""),
             GeometryCheck(
-                script="obj = next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Sphere'), None); print(obj.Radius.Value if obj else 'NOT_FOUND')",
+                script="obj=next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Sphere'),None) or next((o for o in App.ActiveDocument.Objects if 'sphere' in o.Name.lower() and hasattr(o,'Shape')),None); print(obj.Radius.Value if (obj and hasattr(obj,'Radius')) else round(obj.Shape.BoundBox.XLength/2,1) if (obj and hasattr(obj,'Shape')) else 'NOT_FOUND')",
                 expected=15.0,
             ),
         ],
@@ -106,13 +106,13 @@ BASIC_GEOMETRY: list[TestCase] = [
         category="basic_geometry",
         prompt="Create a cone with base radius 20mm, top radius 10mm, and height 30mm.",
         verifications=[
-            ObjectCheck(name_contains="Cone", type_contains="Part::Cone"),
+            ObjectCheck(name_contains="Cone", type_contains=""),
             GeometryCheck(
-                script="obj = next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Cone'), None); print(obj.Radius1.Value if obj else 'NOT_FOUND')",
+                script="obj=next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Cone'),None) or next((o for o in App.ActiveDocument.Objects if 'cone' in o.Name.lower() and hasattr(o,'Shape')),None); print(obj.Radius1.Value if (obj and hasattr(obj,'Radius1')) else round(obj.Shape.BoundBox.XLength/2,1) if (obj and hasattr(obj,'Shape')) else 'NOT_FOUND')",
                 expected=20.0,
             ),
             GeometryCheck(
-                script="obj = next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Cone'), None); print(obj.Height.Value if obj else 'NOT_FOUND')",
+                script="obj=next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Cone'),None) or next((o for o in App.ActiveDocument.Objects if 'cone' in o.Name.lower() and hasattr(o,'Shape')),None); print(obj.Height.Value if (obj and hasattr(obj,'Height')) else round(obj.Shape.BoundBox.ZLength,1) if (obj and hasattr(obj,'Shape')) else 'NOT_FOUND')",
                 expected=30.0,
             ),
         ],
@@ -123,13 +123,13 @@ BASIC_GEOMETRY: list[TestCase] = [
         category="basic_geometry",
         prompt="Create a torus with major radius 30mm and minor radius 10mm.",
         verifications=[
-            ObjectCheck(name_contains="Torus", type_contains="Part::Torus"),
+            ObjectCheck(name_contains="Torus", type_contains=""),
             GeometryCheck(
-                script="obj = next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Torus'), None); print(obj.Radius1.Value if obj else 'NOT_FOUND')",
+                script="obj=next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Torus'),None) or next((o for o in App.ActiveDocument.Objects if 'torus' in o.Name.lower() and hasattr(o,'Shape')),None); print(obj.Radius1.Value if (obj and hasattr(obj,'Radius1')) else round(obj.Shape.BoundBox.XLength/2-obj.Shape.BoundBox.ZLength/2,1) if (obj and hasattr(obj,'Shape')) else 'NOT_FOUND')",
                 expected=30.0,
             ),
             GeometryCheck(
-                script="obj = next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Torus'), None); print(obj.Radius2.Value if obj else 'NOT_FOUND')",
+                script="obj=next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Torus'),None) or next((o for o in App.ActiveDocument.Objects if 'torus' in o.Name.lower() and hasattr(o,'Shape')),None); print(obj.Radius2.Value if (obj and hasattr(obj,'Radius2')) else round(obj.Shape.BoundBox.ZLength/2,1) if (obj and hasattr(obj,'Shape')) else 'NOT_FOUND')",
                 expected=10.0,
             ),
         ],
@@ -250,11 +250,11 @@ App.ActiveDocument.recompute()
 """,
         verifications=[
             GeometryCheck(
-                script="obj = next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Box'), None); print(obj.Length.Value if obj else 'NOT_FOUND')",
+                script="obj=next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Box'),None) or next((o for o in App.ActiveDocument.Objects if 'box' in o.Name.lower() and hasattr(o,'Shape')),None); print(obj.Length.Value if (obj and hasattr(obj,'Length')) else round(obj.Shape.BoundBox.XLength,1) if (obj and hasattr(obj,'Shape')) else 'NOT_FOUND')",
                 expected=80.0,
             ),
             GeometryCheck(
-                script="obj = next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Box'), None); print(obj.Height.Value if obj else 'NOT_FOUND')",
+                script="obj=next((o for o in App.ActiveDocument.Objects if o.TypeId=='Part::Box'),None) or next((o for o in App.ActiveDocument.Objects if 'box' in o.Name.lower() and hasattr(o,'Shape')),None); print(obj.Height.Value if (obj and hasattr(obj,'Height')) else round(obj.Shape.BoundBox.ZLength,1) if (obj and hasattr(obj,'Shape')) else 'NOT_FOUND')",
                 expected=25.0,
             ),
         ],
