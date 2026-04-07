@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from agent.config import PROVIDER_MODELS, UserConfig, load_config, save_config
 from agent.llm import is_ollama_running, list_ollama_models
 from agent.rag import build_rag_tool, collection_size
+from agent.tutorial_rag import build_tutorial_retriever, collection_size as tutorial_collection_size
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -105,6 +106,23 @@ with st.sidebar:
     freecad_host = st.text_input("Host", value=config.freecad_host)
     freecad_port = st.number_input("Port", value=config.freecad_port, min_value=1, max_value=65535)
 
+    # Tutorial RAG toggle
+    st.divider()
+    st.subheader("Experimental")
+    use_tutorial_rag = st.toggle(
+        "Spatial reasoning (tutorial RAG)",
+        value=config.use_tutorial_rag,
+        help=(
+            "Automatically injects relevant FreeCAD design tutorials into every agent turn "
+            "to improve spatial reasoning. Requires running: python scripts/ingest_tutorials.py"
+        ),
+    )
+    if use_tutorial_rag and tutorial_collection_size() == 0:
+        st.warning(
+            "Tutorial corpus not indexed yet. Run:\n```\npython scripts/ingest_tutorials.py\n```"
+        )
+
+    st.divider()
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Save Settings", use_container_width=True):
@@ -114,6 +132,7 @@ with st.sidebar:
                 api_key=api_key,
                 freecad_host=freecad_host,
                 freecad_port=int(freecad_port),
+                use_tutorial_rag=use_tutorial_rag,
             )
             save_config(new_config)
             # Reset graph so it rebuilds with new config
@@ -158,9 +177,12 @@ with st.sidebar:
     st.subheader("Knowledge Base")
     n = collection_size()
     if n == 0:
-        st.warning("Not indexed yet. Run:\n```\npython scripts/ingest.py\n```")
+        st.warning("API docs not indexed. Run:\n```\npython scripts/ingest.py\n```")
     else:
-        st.success(f"{n} chunks indexed")
+        st.success(f"API docs: {n} chunks")
+    tn = tutorial_collection_size()
+    if tn > 0:
+        st.success(f"Tutorials: {tn} chunks")
 
     # Session controls
     st.divider()
@@ -200,7 +222,8 @@ def _get_graph():
             return None
         from agent.graph import build_graph
         rag_tool = build_rag_tool()
-        st.session_state.graph = build_graph(cfg, rag_tool=rag_tool)
+        tutorial_retriever = build_tutorial_retriever() if cfg.use_tutorial_rag else None
+        st.session_state.graph = build_graph(cfg, rag_tool=rag_tool, tutorial_retriever=tutorial_retriever)
     return st.session_state.graph
 
 

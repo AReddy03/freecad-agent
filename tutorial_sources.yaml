@@ -1,0 +1,61 @@
+# FreeCAD Tutorial RAG — source configuration
+#
+# Edit this file to add/remove tutorial documents.
+# Then re-run:  python scripts/ingest_tutorials.py --clear
+#
+# Supported source types:
+#   wiki_pages      — FreeCAD wiki URLs (HTML → markdown)
+#   external_urls   — Any other web page (HTML → markdown)
+#   local_files     — Local PDF, DOCX, or MD files (absolute or relative to project root)
+#   youtube_videos  — YouTube video IDs or full URLs (captions fetched automatically)
+
+# ---------------------------------------------------------------------------
+# FreeCAD wiki — Basic modeling & Part Design tutorials only
+# ---------------------------------------------------------------------------
+wiki_pages:
+  # Conceptual / orientation
+  - https://wiki.freecad.org/Part_and_PartDesign
+  - https://wiki.freecad.org/Feature_editing
+  - https://wiki.freecad.org/Constructive_solid_geometry
+
+  # Basic modeling (Part workbench workflow)
+  - https://wiki.freecad.org/Basic_modeling_tutorial
+  - https://wiki.freecad.org/Creating_a_simple_part_with_Part_WB
+
+  # Basic Part Design (Sketcher + PartDesign workflow)
+  - https://wiki.freecad.org/Basic_Part_Design_Tutorial
+  - https://wiki.freecad.org/Basic_Part_Design_Tutorial_019
+
+  # Sketcher concepts (needed to understand Part Design)
+  - https://wiki.freecad.org/Sketcher_Workbench
+  - https://wiki.freecad.org/Sketcher_Lecture
+
+  # Part Design workbench overview
+  - https://wiki.freecad.org/PartDesign_Workbench
+
+# ---------------------------------------------------------------------------
+# Additional external web pages
+# Add any external tutorial URLs here.
+# ---------------------------------------------------------------------------
+external_urls: []
+  # - https://example.com/freecad-tutorial
+
+# ---------------------------------------------------------------------------
+# Local files
+# Paths relative to the project root, or absolute.
+# Supported: .pdf, .docx, .md
+# ---------------------------------------------------------------------------
+local_files: []
+  # - docs/my_tutorial.pdf
+  # - docs/design_guide.docx
+  # - docs/notes.md
+
+# ---------------------------------------------------------------------------
+# YouTube videos
+# Provide video IDs (11 chars) or full watch/share URLs.
+# Captions must be available (auto-generated or manual).
+# ---------------------------------------------------------------------------
+youtube_videos: []
+  # - dQw4w9WgXcQ
+  # - https://www.youtube.com/watch?v=dQw4w9WgXcQ
+  # - https://youtu.be/dQw4w9WgXcQ

@@ -25,6 +25,8 @@ class UserConfig(BaseModel):
     # FreeCAD RPC server address (matches rpc_server.py defaults)
     freecad_host: str = "127.0.0.1"
     freecad_port: int = 65432
+    # Experimental: inject tutorial RAG context into every reason node call
+    use_tutorial_rag: bool = False
 
     @property
     def needs_api_key(self) -> bool:

@@ -42,8 +42,33 @@ references existing objects (fillet, chamfer, boolean, pocket, mirror, array), c
 - To get an object: `obj = App.ActiveDocument.getObject("Name")`.
 """
 
-_MAX_CHARS = 3200   # ~800 tokens at 4 chars/token
+_MAX_CHARS = 3200        # ~800 tokens at 4 chars/token
 _MAX_ENTRIES = 30
+_MAX_TUTORIAL_CHARS = 900  # 3 chunks × ~300 chars each — injected every turn, keep tight
+
+
+def format_tutorial_context(docs: list) -> str:
+    """
+    Format retrieved tutorial chunks for injection into the system prompt.
+    Each doc is a LangChain Document with .page_content and .metadata.
+    Capped at _MAX_TUTORIAL_CHARS to stay within per-turn token budget.
+    Returns an empty string if docs is empty.
+    """
+    if not docs:
+        return ""
+
+    lines = ["## Relevant design guidance"]
+    for i, doc in enumerate(docs, 1):
+        title = doc.metadata.get("title", "")
+        source = doc.metadata.get("source", "")
+        header = f"[{i}] {title}" if title else f"[{i}] {source}"
+        lines.append(header)
+        lines.append(doc.page_content.strip())
+
+    result = "\n\n".join(lines)
+    if len(result) > _MAX_TUTORIAL_CHARS:
+        result = result[:_MAX_TUTORIAL_CHARS] + "\n[... truncated ...]"
+    return result
 
 
 def format_feature_tree_context(feature_tree: list[dict]) -> str:

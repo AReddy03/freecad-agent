@@ -14,7 +14,7 @@ appends new FeatureEntry dicts to state["feature_tree"].
 import sqlite3
 from pathlib import Path
 
-from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
@@ -22,7 +22,7 @@ from langgraph.types import interrupt
 
 from agent.config import UserConfig
 from agent.llm import get_llm
-from agent.prompts import SYSTEM_PROMPT, format_feature_tree_context
+from agent.prompts import SYSTEM_PROMPT, format_feature_tree_context, format_tutorial_context
 from agent.safety import confirmation_message, is_destructive
 from agent.state import AgentState, make_feature_entry
 from agent.tools import _get_client, make_freecad_tools
@@ -31,7 +31,7 @@ CHECKPOINTS_PATH = Path(__file__).parent.parent / "checkpoints.db"
 MAX_ITERATIONS = 20  # hard stop to prevent infinite loops
 
 
-def build_graph(config: UserConfig, rag_tool=None):
+def build_graph(config: UserConfig, rag_tool=None, tutorial_retriever=None):
     """
     Build and compile the agent graph for the given user config.
     Returns a compiled LangGraph graph with a SqliteSaver checkpointer.
@@ -51,10 +51,25 @@ def build_graph(config: UserConfig, rag_tool=None):
     # -----------------------------------------------------------------------
 
     def reason(state: AgentState) -> dict:
-        """Ask the LLM what to do next, injecting the feature tree into context."""
+        """Ask the LLM what to do next, injecting feature tree and optional tutorial context."""
         feature_tree = state.get("feature_tree") or []
         tree_context = format_feature_tree_context(feature_tree)
-        system_content = SYSTEM_PROMPT + "\n\n" + tree_context
+
+        # Proactive tutorial retrieval: query using the most recent human message.
+        tutorial_context = ""
+        if tutorial_retriever is not None:
+            human_msgs = [m for m in state["messages"] if isinstance(m, HumanMessage)]
+            if human_msgs:
+                try:
+                    docs = tutorial_retriever.invoke(human_msgs[-1].content)
+                    tutorial_context = format_tutorial_context(docs)
+                except Exception:
+                    pass  # retrieval failure is non-fatal
+
+        system_content = SYSTEM_PROMPT
+        if tutorial_context:
+            system_content += "\n\n" + tutorial_context
+        system_content += "\n\n" + tree_context
 
         # Replace any existing SystemMessage; keep all other messages.
         messages = [
