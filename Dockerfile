@@ -18,10 +18,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY agent/ agent/
 COPY scripts/ scripts/
 COPY data/ data/
+COPY tutorial_sources.yaml .
 
-# Build the ChromaDB collection (requires internet access at build time).
+# Build the API docs ChromaDB collection.
 # --wiki-only skips the GitHub zip download which can be slow/flaky in CI.
 RUN python scripts/ingest.py --wiki-only
+
+# Build the tutorial ChromaDB collection (wiki tutorial pages only).
+RUN python scripts/ingest_tutorials.py --type wiki
 
 # ---------------------------------------------------------------------------
 # Stage 2 — Application
@@ -37,8 +41,9 @@ COPY agent/ agent/
 COPY ui/ ui/
 COPY scripts/ scripts/
 
-# Copy the pre-built vector store from stage 1
+# Copy the pre-built vector stores from stage 1
 COPY --from=ingest /app/chroma_db ./chroma_db
+COPY --from=ingest /app/chroma_tutorials ./chroma_tutorials
 
 # User config is mounted at runtime via docker-compose volume
 # (see docker-compose.yml) — the container writes to /root/.freecad-agent/
