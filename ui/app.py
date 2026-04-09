@@ -266,8 +266,10 @@ def _run_graph(user_input: str):
         with st.status("Agent running…", expanded=True) as agent_status:
             try:
                 for event in graph.stream(input_payload, config=run_config, stream_mode="updates"):
-                    # event is {node_name: state_updates}
+                    # event is {node_name: state_updates}; state_updates is None when node returns {}
                     for node_name, state_updates in event.items():
+                        if not state_updates:
+                            continue
                         if node_name == "reason":
                             msgs = state_updates.get("messages", [])
                             if msgs:
