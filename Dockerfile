@@ -40,6 +40,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY agent/ agent/
 COPY ui/ ui/
 COPY scripts/ scripts/
+COPY skills/ skills/
 
 # Copy the pre-built vector stores from stage 1
 COPY --from=ingest /app/chroma_db ./chroma_db

@@ -24,10 +24,9 @@ from agent.config import UserConfig
 from agent.llm import get_llm
 from agent.prompts import (
     SYSTEM_PROMPT,
+    format_all_skills_context,
     format_feature_tree_context,
-    format_matched_skills_context,
     format_memory_context,
-    format_skills_index,
     format_tutorial_context,
 )
 from agent.safety import confirmation_message, is_destructive
@@ -121,20 +120,11 @@ def build_graph(
             except Exception:
                 pass  # memory failure is non-fatal
 
-        # --- Skills index (brief list of available skills) ---
-        skills_index_ctx = ""
+        # --- All skills (injected unconditionally every turn) ---
+        all_skills_ctx = ""
         if skills_registry is not None:
             try:
-                skills_index_ctx = format_skills_index(skills_registry)
-            except Exception:
-                pass
-
-        # --- Matched skills content (proactive, like tutorial RAG) ---
-        matched_skills_ctx = ""
-        if skills_registry is not None and last_human:
-            try:
-                matched = skills_registry.match_skills(last_human, top_k=2)
-                matched_skills_ctx = format_matched_skills_context(matched)
+                all_skills_ctx = format_all_skills_context(skills_registry)
             except Exception:
                 pass
 
@@ -148,14 +138,12 @@ def build_graph(
                 pass  # retrieval failure is non-fatal
 
         # --- Assemble system prompt ---
-        # Order: memory → skills index → matched skills → tutorials → feature tree
+        # Order: memory → skills (all, always) → tutorials → feature tree
         system_content = SYSTEM_PROMPT
         if memory_ctx:
             system_content += "\n\n" + memory_ctx
-        if skills_index_ctx:
-            system_content += "\n\n" + skills_index_ctx
-        if matched_skills_ctx:
-            system_content += "\n\n" + matched_skills_ctx
+        if all_skills_ctx:
+            system_content += "\n\n" + all_skills_ctx
         if tutorial_context:
             system_content += "\n\n" + tutorial_context
         system_content += "\n\n" + tree_context

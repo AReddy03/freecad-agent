@@ -48,6 +48,8 @@ _MAX_TUTORIAL_CHARS = 900   # 3 chunks × ~300 chars each — injected every tur
 _MAX_MEMORY_CHARS = 1200    # ~300 tokens; preferences + recent summaries
 _MAX_SKILLS_CHARS = 2000    # matched skill body — up to 2 skills × ~1000 chars each
 _MAX_SKILLS_INDEX_CHARS = 600  # brief skills listing in system prompt
+_MAX_ALL_SKILLS_CHARS = 20000  # all skills injected every turn; ~5 000 tokens — fine for 100k+ context models
+_MAX_SKILL_BODY_CHARS = 3500   # per-skill cap so no single skill dominates
 
 
 def format_memory_context(memory_store, query: str = "") -> str:
@@ -167,6 +169,43 @@ def format_matched_skills_context(skills: list) -> str:
         return ""
 
     return "\n".join(lines)
+
+
+def format_all_skills_context(skills_registry) -> str:
+    """
+    Inject the full content of ALL loaded skills into the system prompt.
+    Called unconditionally every turn so the agent always has complete
+    CAD best-practice guidance — no keyword matching required.
+
+    Each skill is capped at _MAX_SKILL_BODY_CHARS; total capped at
+    _MAX_ALL_SKILLS_CHARS.  Returns "" if no skills are loaded.
+    """
+    all_skills = skills_registry.skill_names()
+    if not all_skills:
+        return ""
+
+    sections = ["## CAD Design Skills — Best Practices"]
+    total = len(sections[0])
+
+    for name in all_skills:
+        skill = skills_registry.get_skill(name)
+        if skill is None:
+            continue
+        body = skill.content.strip()
+        if len(body) > _MAX_SKILL_BODY_CHARS:
+            body = body[:_MAX_SKILL_BODY_CHARS] + "\n[... truncated — call skill_search for full content ...]"
+        block = f"\n### {skill.name}\n{body}"
+        if total + len(block) > _MAX_ALL_SKILLS_CHARS:
+            sections.append(
+                f"\n[... remaining skills omitted — call skill_search('{name}') to retrieve ...]"
+            )
+            break
+        sections.append(block)
+        total += len(block)
+
+    if len(sections) == 1:
+        return ""
+    return "\n".join(sections)
 
 
 def format_tutorial_context(docs: list) -> str:
