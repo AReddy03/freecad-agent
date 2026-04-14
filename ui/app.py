@@ -184,6 +184,45 @@ with st.sidebar:
     if tn > 0:
         st.success(f"Tutorials: {tn} chunks")
 
+    # Memory status
+    st.divider()
+    st.subheader("Memory")
+    try:
+        from agent.memory import get_memory_store
+        _ms = get_memory_store()
+        _n_mem = _ms.count()
+        if _n_mem == 0:
+            st.info("No memories yet. The agent learns as you work.")
+        else:
+            st.success(f"{_n_mem} memor{'y' if _n_mem == 1 else 'ies'} stored")
+        with st.expander("View recent memories", expanded=False):
+            _recent = _ms.get_recent(limit=10)
+            if _recent:
+                for _m in _recent:
+                    st.caption(f"[{_m['memory_type']}] {_m['content'][:100]}")
+            else:
+                st.caption("Nothing saved yet.")
+    except Exception as _e:
+        st.warning(f"Memory store unavailable: {_e}")
+
+    # Skills status
+    st.divider()
+    st.subheader("Skills")
+    try:
+        from agent.skills import get_skills_registry
+        _sr = get_skills_registry()
+        _all_skills = _sr.list_all()
+        if _all_skills:
+            st.success(f"{len(_all_skills)} skill{'s' if len(_all_skills) != 1 else ''} loaded")
+        else:
+            st.warning("No skills loaded. Add SKILL.md files to the skills/ directory.")
+        with st.expander("Browse skills", expanded=False):
+            for _s in _all_skills:
+                first_sentence = _s["description"].split(".")[0].strip()
+                st.caption(f"**{_s['name']}** — {first_sentence[:80]}")
+    except Exception as _e:
+        st.warning(f"Skills registry unavailable: {_e}")
+
     # Session controls
     st.divider()
     if st.button("New Session", use_container_width=True):
@@ -221,9 +260,19 @@ def _get_graph():
         if not cfg.is_ready:
             return None
         from agent.graph import build_graph
+        from agent.memory import get_memory_store
+        from agent.skills import get_skills_registry
         rag_tool = build_rag_tool()
         tutorial_retriever = build_tutorial_retriever() if cfg.use_tutorial_rag else None
-        st.session_state.graph = build_graph(cfg, rag_tool=rag_tool, tutorial_retriever=tutorial_retriever)
+        memory_store = get_memory_store()
+        skills_registry = get_skills_registry()
+        st.session_state.graph = build_graph(
+            cfg,
+            rag_tool=rag_tool,
+            tutorial_retriever=tutorial_retriever,
+            memory_store=memory_store,
+            skills_registry=skills_registry,
+        )
     return st.session_state.graph
 
 
@@ -232,13 +281,15 @@ def _get_graph():
 # ---------------------------------------------------------------------------
 
 _TOOL_LABELS = {
-    "execute_script":  "⚙️ Executing script",
-    "get_screenshot":  "📸 Taking screenshot",
-    "list_objects":    "🔍 Listing objects",
+    "execute_script":   "⚙️ Executing script",
+    "get_screenshot":   "📸 Taking screenshot",
+    "list_objects":     "🔍 Listing objects",
     "get_feature_tree": "🌳 Checking feature tree",
-    "rag_search":      "📚 Searching docs",
-    "clear_document":  "🗑️ Clearing document",
-    "save_document":   "💾 Saving document",
+    "rag_search":       "📚 Searching docs",
+    "clear_document":   "🗑️ Clearing document",
+    "save_document":    "💾 Saving document",
+    "memory_save":      "🧠 Saving to memory",
+    "skill_search":     "🔧 Searching skills library",
 }
 
 
