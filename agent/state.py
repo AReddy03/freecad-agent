@@ -54,3 +54,7 @@ class AgentState(TypedDict):
     iteration:       int
     feature_tree:    Annotated[list[dict], append_features]
     turn_index:      int
+    # Pre-formatted strings injected into the system prompt each turn.
+    # Computed live in the reason node closure; not serialized as Python objects.
+    memory_context:  str | None
+    skills_context:  str | None

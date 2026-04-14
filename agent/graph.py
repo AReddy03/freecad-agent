@@ -22,7 +22,14 @@ from langgraph.types import interrupt
 
 from agent.config import UserConfig
 from agent.llm import get_llm
-from agent.prompts import SYSTEM_PROMPT, format_feature_tree_context, format_tutorial_context
+from agent.prompts import (
+    SYSTEM_PROMPT,
+    format_feature_tree_context,
+    format_matched_skills_context,
+    format_memory_context,
+    format_skills_index,
+    format_tutorial_context,
+)
 from agent.safety import confirmation_message, is_destructive
 from agent.state import AgentState, make_feature_entry
 from agent.tools import _get_client, make_freecad_tools
@@ -30,17 +37,64 @@ from agent.tools import _get_client, make_freecad_tools
 CHECKPOINTS_PATH = Path(__file__).parent.parent / "checkpoints.db"
 MAX_ITERATIONS = 20  # hard stop to prevent infinite loops
 
+# Track which turn_index values have already had a summary saved, to avoid duplicates.
+_saved_summary_turns: set = set()
 
-def build_graph(config: UserConfig, rag_tool=None, tutorial_retriever=None):
+
+def _maybe_save_session_summary(memory_store, state, final_answer: str) -> None:
+    """
+    Save a compact session summary to long-term memory when the agent
+    produces a terminal answer (no tool calls) and the feature tree is non-empty.
+    Only saved once per turn_index to prevent duplicates on graph re-runs.
+    Errors are silently swallowed — memory failure must never crash the graph.
+    """
+    from agent.memory import MemoryType
+
+    turn = state.get("turn_index", 0)
+    if turn in _saved_summary_turns:
+        return
+
+    try:
+        human_msgs = [m for m in state["messages"] if isinstance(m, HumanMessage)]
+        last_human = human_msgs[-1].content[:120] if human_msgs else "(no prompt)"
+        feature_tree = state.get("feature_tree") or []
+        obj_count = len([e for e in feature_tree if e.get("valid", True)])
+
+        summary = (
+            f"Task: {last_human} | "
+            f"Objects created: {obj_count} | "
+            f"Result: {final_answer[:200]}"
+        )
+        memory_store.save(
+            content=summary,
+            memory_type=MemoryType.SESSION_SUMMARY,
+            importance=1.0,
+            session_id=str(turn),
+        )
+        _saved_summary_turns.add(turn)
+    except Exception:
+        pass
+
+
+def build_graph(
+    config: UserConfig,
+    rag_tool=None,
+    tutorial_retriever=None,
+    memory_store=None,
+    skills_registry=None,
+):
     """
     Build and compile the agent graph for the given user config.
     Returns a compiled LangGraph graph with a SqliteSaver checkpointer.
 
     Args:
-        config:   user's LLM provider / model / API key config
-        rag_tool: optional LangChain @tool for RAG search (added when ChromaDB is ready)
+        config:           user's LLM provider / model / API key config
+        rag_tool:         optional LangChain @tool for RAG search (added when ChromaDB is ready)
+        tutorial_retriever: optional LangChain retriever for tutorial RAG
+        memory_store:     optional MemoryStore for cross-session memory
+        skills_registry:  optional SkillsRegistry for CAD best-practice skills
     """
-    freecad_tools = make_freecad_tools(config)
+    freecad_tools = make_freecad_tools(config, memory_store=memory_store, skills_registry=skills_registry)
     all_tools = freecad_tools + ([rag_tool] if rag_tool else [])
 
     llm = get_llm(config).bind_tools(all_tools)
@@ -51,22 +105,57 @@ def build_graph(config: UserConfig, rag_tool=None, tutorial_retriever=None):
     # -----------------------------------------------------------------------
 
     def reason(state: AgentState) -> dict:
-        """Ask the LLM what to do next, injecting feature tree and optional tutorial context."""
+        """Ask the LLM what to do next, injecting memory, skills, tutorials, and feature tree."""
         feature_tree = state.get("feature_tree") or []
         tree_context = format_feature_tree_context(feature_tree)
 
-        # Proactive tutorial retrieval: query using the most recent human message.
-        tutorial_context = ""
-        if tutorial_retriever is not None:
-            human_msgs = [m for m in state["messages"] if isinstance(m, HumanMessage)]
-            if human_msgs:
-                try:
-                    docs = tutorial_retriever.invoke(human_msgs[-1].content)
-                    tutorial_context = format_tutorial_context(docs)
-                except Exception:
-                    pass  # retrieval failure is non-fatal
+        # Most recent human message — used for memory search and skill matching.
+        human_msgs = [m for m in state["messages"] if isinstance(m, HumanMessage)]
+        last_human = human_msgs[-1].content if human_msgs else ""
 
+        # --- Memory injection ---
+        memory_ctx = ""
+        if memory_store is not None:
+            try:
+                memory_ctx = format_memory_context(memory_store, query=last_human)
+            except Exception:
+                pass  # memory failure is non-fatal
+
+        # --- Skills index (brief list of available skills) ---
+        skills_index_ctx = ""
+        if skills_registry is not None:
+            try:
+                skills_index_ctx = format_skills_index(skills_registry)
+            except Exception:
+                pass
+
+        # --- Matched skills content (proactive, like tutorial RAG) ---
+        matched_skills_ctx = ""
+        if skills_registry is not None and last_human:
+            try:
+                matched = skills_registry.match_skills(last_human, top_k=2)
+                matched_skills_ctx = format_matched_skills_context(matched)
+            except Exception:
+                pass
+
+        # --- Tutorial retrieval ---
+        tutorial_context = ""
+        if tutorial_retriever is not None and last_human:
+            try:
+                docs = tutorial_retriever.invoke(last_human)
+                tutorial_context = format_tutorial_context(docs)
+            except Exception:
+                pass  # retrieval failure is non-fatal
+
+        # --- Assemble system prompt ---
+        # Order: memory → skills index → matched skills → tutorials → feature tree
         system_content = SYSTEM_PROMPT
+        if memory_ctx:
+            system_content += "\n\n" + memory_ctx
+        if skills_index_ctx:
+            system_content += "\n\n" + skills_index_ctx
+        if matched_skills_ctx:
+            system_content += "\n\n" + matched_skills_ctx
         if tutorial_context:
             system_content += "\n\n" + tutorial_context
         system_content += "\n\n" + tree_context
@@ -78,6 +167,14 @@ def build_graph(config: UserConfig, rag_tool=None, tutorial_retriever=None):
         messages = [SystemMessage(content=system_content)] + messages
 
         response = llm.invoke(messages)
+
+        # Auto-save a session summary when the agent produces a terminal answer
+        # (no tool calls) and real work was done (feature_tree is non-empty).
+        if memory_store is not None:
+            tool_calls = getattr(response, "tool_calls", []) or []
+            if not tool_calls and feature_tree and isinstance(response.content, str):
+                _maybe_save_session_summary(memory_store, state, response.content)
+
         return {
             "messages": [response],
             "iteration": state.get("iteration", 0) + 1,

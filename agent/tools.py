@@ -24,8 +24,14 @@ def _get_client(config: UserConfig) -> FreeCADClient:
     return _client
 
 
-def make_freecad_tools(config: UserConfig) -> list:
-    """Return LangChain tools bound to the given FreeCAD connection config."""
+def make_freecad_tools(config: UserConfig, memory_store=None, skills_registry=None) -> list:
+    """Return LangChain tools bound to the given FreeCAD connection config.
+
+    Args:
+        config:           user's LLM provider / model / API key / FreeCAD connection config
+        memory_store:     optional MemoryStore — adds the memory_save tool when provided
+        skills_registry:  optional SkillsRegistry — adds the skill_search tool when provided
+    """
 
     @tool
     def execute_script(
@@ -123,5 +129,77 @@ def make_freecad_tools(config: UserConfig) -> list:
         except RuntimeError as e:
             return f"FREECAD ERROR: {e}"
 
+    extra_tools = []
+
+    # -----------------------------------------------------------------------
+    # memory_save  (only when memory_store is provided)
+    # -----------------------------------------------------------------------
+    if memory_store is not None:
+        from agent.memory import MemoryType
+
+        @tool
+        def memory_save(
+            content: Annotated[str, "The information to remember across sessions"],
+            memory_type: Annotated[
+                str,
+                "Category: preference | script_pattern | session_summary | fact",
+            ] = "fact",
+            importance: Annotated[
+                float,
+                "Importance from 0.0 to 5.0 (default 1.0). Use 2-3 for frequently useful facts.",
+            ] = 1.0,
+            tags: Annotated[
+                str,
+                "Comma-separated tags for later filtering, e.g. 'units,metric' (optional)",
+            ] = "",
+        ) -> str:
+            """Save a piece of information to long-term memory that persists across sessions.
+            Use for user preferences (units, naming style, workbench choices), successful
+            FreeCAD script patterns, or anything the user explicitly asks to remember.
+            This does NOT write to the FreeCAD document."""
+            try:
+                tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+                mid = memory_store.save(
+                    content=content,
+                    memory_type=MemoryType(memory_type),
+                    importance=float(importance),
+                    tags=tag_list,
+                )
+                return f"Saved to memory (id={mid}): {content[:80]}"
+            except Exception as e:
+                return f"MEMORY ERROR: {e}"
+
+        extra_tools.append(memory_save)
+
+    # -----------------------------------------------------------------------
+    # skill_search  (only when skills_registry is provided)
+    # -----------------------------------------------------------------------
+    if skills_registry is not None:
+
+        @tool
+        def skill_search(
+            query: Annotated[
+                str,
+                "Describe the CAD operation or design challenge you need guidance on",
+            ],
+        ) -> str:
+            """Search the CAD skills library for best-practice guidance documents.
+            Returns the full content of up to 2 matched skills.
+            Call this when working on sketches, feature tree organisation, parametric
+            modelling, assembly design, manufacturing constraints, or tolerancing."""
+            matched = skills_registry.match_skills(query, top_k=2)
+            if not matched:
+                all_names = ", ".join(skills_registry.skill_names())
+                return (
+                    f"No skills matched '{query}'. "
+                    f"Available skills: {all_names}"
+                )
+            parts = []
+            for skill in matched:
+                parts.append(f"### Skill: {skill.name}\n\n{skill.content.strip()}")
+            return "\n\n---\n\n".join(parts)
+
+        extra_tools.append(skill_search)
+
     return [execute_script, get_screenshot, list_objects, get_feature_tree,
-            clear_document, save_document]
+            clear_document, save_document] + extra_tools
