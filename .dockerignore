@@ -1,0 +1,21 @@
+# Keep the build context small: only agent/, ui/, scripts/, requirements*.txt
+# and tutorial_sources.yaml are needed.
+.git
+.github
+.venv
+.vscode
+.claude
+**/__pycache__
+*.pyc
+.pytest_cache
+data/
+chroma_db/
+chroma_tutorials/
+checkpoints.db
+tests/
+logs/
+eval_results/
+skills/
+*.zip
+*.FCStd
+.env

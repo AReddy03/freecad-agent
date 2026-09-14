@@ -5,6 +5,8 @@ Sources:
   1. FreeCAD wiki  — key pages scraped via HTTP
   2. FreeCAD-documentation GitHub repo — downloaded as a zip and extracted
 
+Re-running is safe: chunks have stable IDs, so existing ones are overwritten.
+
 Run:
     python scripts/ingest.py              # ingest all sources
     python scripts/ingest.py --wiki-only  # wiki only
@@ -18,24 +20,17 @@ import sys
 import zipfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import requests
-from bs4 import BeautifulSoup
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_chroma import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.documents import Document
-from markdownify import markdownify
+
+from agent.vectorstore import DOCS_CHROMA_PATH, DOCS_COLLECTION
+from scripts.ingest_common import index_documents, open_vectorstore, scrape_pages
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-
-CHROMA_PATH = str(Path(__file__).parent.parent / "chroma_db")
-COLLECTION_NAME = "freecad_docs"
-EMBED_MODEL = "all-MiniLM-L6-v2"
-
-CHUNK_SIZE = 800
-CHUNK_OVERLAP = 150
 
 # Wiki pages to scrape — covers the most commonly needed APIs
 WIKI_PAGES = [
@@ -107,47 +102,11 @@ GITHUB_INCLUDE_DIRS = {
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _scrape_wiki_page(url: str) -> Document | None:
-    """Download one wiki page and return a LangChain Document, or None on error."""
-    try:
-        resp = requests.get(url, timeout=15)
-        resp.raise_for_status()
-    except Exception as e:
-        print(f"  SKIP {url}: {e}")
-        return None
-
-    soup = BeautifulSoup(resp.text, "html.parser")
-
-    # Extract the article title
-    title_tag = soup.find("h1", {"id": "firstHeading"})
-    title = title_tag.get_text(strip=True) if title_tag else url.split("/")[-1]
-
-    # Extract the main article body
-    content_div = soup.find("div", {"id": "mw-content-text"})
-    if not content_div:
-        return None
-
-    # Remove navigation boxes, footers, edit buttons
-    for tag in content_div.find_all(["div", "table"], class_=["noprint", "navbox", "toc"]):
-        tag.decompose()
-
-    text = markdownify(str(content_div), heading_style="ATX", strip=["a"])
-    text = text.strip()
-
-    if len(text) < 100:
-        return None
-
-    return Document(
-        page_content=text,
-        metadata={"source": url, "title": title, "type": "wiki"},
-    )
-
-
 def _download_github_docs() -> list[Document]:
     """Download the FreeCAD-documentation repo zip and extract markdown files."""
     print("Downloading FreeCAD-documentation from GitHub...")
     try:
-        resp = requests.get(GITHUB_ZIP_URL, timeout=60, stream=True)
+        resp = requests.get(GITHUB_ZIP_URL, timeout=60)
         resp.raise_for_status()
     except Exception as e:
         print(f"  FAILED: {e}")
@@ -182,15 +141,6 @@ def _download_github_docs() -> list[Document]:
     return docs
 
 
-def _chunk(docs: list[Document]) -> list[Document]:
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=CHUNK_SIZE,
-        chunk_overlap=CHUNK_OVERLAP,
-        separators=["\n\n", "\n", " ", ""],
-    )
-    return splitter.split_documents(docs)
-
-
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -202,50 +152,22 @@ def main():
     parser.add_argument("--clear", action="store_true", help="Wipe ChromaDB before ingesting")
     args = parser.parse_args()
 
-    print("Loading embedding model (downloads once on first run)...")
-    embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
-
-    vectorstore = Chroma(
-        collection_name=COLLECTION_NAME,
-        embedding_function=embeddings,
-        persist_directory=CHROMA_PATH,
-    )
-
-    if args.clear:
-        print("Clearing existing ChromaDB collection...")
-        vectorstore._collection.delete(where={"source": {"$ne": ""}})
+    vectorstore = open_vectorstore(DOCS_COLLECTION, DOCS_CHROMA_PATH, clear=args.clear)
 
     raw_docs: list[Document] = []
 
     if not args.github_only:
         print(f"\nScraping {len(WIKI_PAGES)} FreeCAD wiki pages...")
-        for url in WIKI_PAGES:
-            doc = _scrape_wiki_page(url)
-            if doc:
-                raw_docs.append(doc)
-                print(f"  + {doc.metadata['title']}")
+        raw_docs.extend(scrape_pages(WIKI_PAGES, source_type="wiki"))
 
     if not args.wiki_only:
-        github_docs = _download_github_docs()
-        raw_docs.extend(github_docs)
+        raw_docs.extend(_download_github_docs())
 
     if not raw_docs:
         print("\nNo documents collected. Exiting.")
         sys.exit(1)
 
-    print(f"\nChunking {len(raw_docs)} documents...")
-    chunks = _chunk(raw_docs)
-    print(f"  -> {len(chunks)} chunks")
-
-    print("Embedding and storing in ChromaDB...")
-    # Add in batches to avoid memory spikes
-    batch_size = 100
-    for i in range(0, len(chunks), batch_size):
-        batch = chunks[i : i + batch_size]
-        vectorstore.add_documents(batch)
-        print(f"  {min(i + batch_size, len(chunks))}/{len(chunks)}")
-
-    total = vectorstore._collection.count()
+    total = index_documents(vectorstore, raw_docs)
     print(f"\nDone. ChromaDB now contains {total} chunks.")
 
 

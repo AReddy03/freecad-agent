@@ -90,7 +90,7 @@ docker build -t freecad-agent:latest .
 git clone <repo>
 cd freecad-agent
 python -m venv .venv && .venv\Scripts\activate   # Windows
-pip install -r requirements.txt
+pip install -r requirements-ingest.txt
 python scripts/ingest.py                          # build knowledge base (~5 min)
 streamlit run ui/app.py
 ```

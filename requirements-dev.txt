@@ -1,0 +1,5 @@
+# Everything, plus test tooling
+-r requirements-ingest.txt
+
+pytest>=8.0.0
+pytest-asyncio>=0.24.0

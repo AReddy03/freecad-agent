@@ -4,28 +4,55 @@ Call make_freecad_tools(config) to get the list of bound tools.
 The rag_search tool is created separately in agent/rag.py.
 """
 
-import base64
-from typing import Annotated
+import threading
+from typing import Annotated, Callable
 
 from langchain_core.tools import tool
 
 from agent.config import UserConfig
 from agent.freecad_client import FreeCADClient, FreeCADConnectionError
 
-# Module-level client; one connection per process.
-_client: FreeCADClient | None = None
+# One client per FreeCAD address, shared process-wide. FreeCADClient serialises
+# requests internally, so it is safe to share across threads.
+_clients: dict[tuple[str, int], FreeCADClient] = {}
+_clients_lock = threading.Lock()
 
 
-def _get_client(config: UserConfig) -> FreeCADClient:
-    global _client
-    if _client is None:
-        _client = FreeCADClient(host=config.freecad_host, port=config.freecad_port)
-    _client.connect()
-    return _client
+def get_client(config: UserConfig) -> FreeCADClient:
+    """Return the shared client for config's FreeCAD address (connects lazily)."""
+    key = (config.freecad_host, config.freecad_port)
+    with _clients_lock:
+        client = _clients.get(key)
+        if client is None:
+            client = _clients[key] = FreeCADClient(host=key[0], port=key[1])
+    return client
+
+
+def _error_text(e: Exception) -> str:
+    prefix = "CONNECTION ERROR" if isinstance(e, FreeCADConnectionError) else "FREECAD ERROR"
+    return f"{prefix}: {e}"
+
+
+def _guard(action: Callable[[], str]) -> str:
+    """Run a FreeCAD call, turning client errors into text the LLM can act on."""
+    try:
+        return action()
+    except (FreeCADConnectionError, RuntimeError) as e:
+        return _error_text(e)
+
+
+def _format_objects(objects: list[dict]) -> str:
+    if not objects:
+        return "Document is empty — no objects."
+    lines = [f"- {o['name']} ({o['label']}) [{o['type']}]" for o in objects]
+    return f"{len(objects)} object(s):\n" + "\n".join(lines)
 
 
 def make_freecad_tools(config: UserConfig) -> list:
     """Return LangChain tools bound to the given FreeCAD connection config."""
+
+    def client() -> FreeCADClient:
+        return get_client(config)
 
     @tool
     def execute_script(
@@ -34,75 +61,42 @@ def make_freecad_tools(config: UserConfig) -> list:
         """Run Python code inside FreeCAD using its scripting API.
         App, Gui, FreeCAD, and FreeCADGui are available in the namespace.
         Returns stdout. On error, returns a string starting with 'FREECAD ERROR:'."""
-        try:
-            client = _get_client(config)
-            output = client.execute_script(code)
-            return output if output else "(script executed with no output)"
-        except FreeCADConnectionError as e:
-            return f"CONNECTION ERROR: {e}"
-        except RuntimeError as e:
-            return f"FREECAD ERROR: {e}"
+        return _guard(lambda: client().execute_script(code) or "(script executed with no output)")
 
-    @tool
+    @tool(response_format="content_and_artifact")
     def get_screenshot(
         direction: Annotated[
             str, "View direction: front | back | top | bottom | left | right | iso"
         ] = "iso",
-    ) -> str:
-        """Capture the current FreeCAD 3D view as a PNG image.
-        Returns a base64-encoded PNG string, or an error message."""
+    ) -> tuple[str, str | None]:
+        """Capture the current FreeCAD 3D view and show it to the user.
+        Returns a short confirmation (the image goes to the UI, not to you),
+        or an error message."""
+        # The base64 PNG travels as the ToolMessage artifact: it reaches the UI
+        # via state["last_screenshot"] but is never sent back to the LLM.
         try:
-            client = _get_client(config)
-            png_bytes = client.get_screenshot(direction)
-            return base64.b64encode(png_bytes).decode()
-        except FreeCADConnectionError as e:
-            return f"CONNECTION ERROR: {e}"
-        except RuntimeError as e:
-            return f"FREECAD ERROR: {e}"
+            image_b64 = client().get_screenshot_base64(direction)
+        except (FreeCADConnectionError, RuntimeError) as e:
+            return _error_text(e), None
+        return f"Screenshot captured ({direction} view) and shown to the user.", image_b64
 
     @tool
     def list_objects() -> str:
-        """List all objects currently in the FreeCAD document.
-        Returns a formatted string with each object's name, label, and type.
-        Call this before any script to understand what is already in the scene."""
-        try:
-            client = _get_client(config)
-            objects = client.list_objects()
-            if not objects:
-                return "Document is empty — no objects."
-            lines = [f"- {o['name']} ({o['label']}) [{o['type']}]" for o in objects]
-            return f"{len(objects)} object(s):\n" + "\n".join(lines)
-        except FreeCADConnectionError as e:
-            return f"CONNECTION ERROR: {e}"
-
-    @tool
-    def get_feature_tree() -> str:
-        """Return the current FreeCAD document object tree as a structured list.
-        Reads live state directly from FreeCAD — use this before any operation
-        that references existing geometry (fillet, chamfer, boolean, pocket,
-        mirror, or any face/edge/body you did not create in the current turn)."""
-        try:
-            client = _get_client(config)
-            objects = client.list_objects()
-            if not objects:
-                return "Current document is empty — no objects exist."
-            lines = ["Current FreeCAD document objects:"]
-            for i, o in enumerate(objects, 1):
-                lines.append(f"  {i}. {o['name']} ({o['label']}) [{o['type']}]")
-            return "\n".join(lines)
-        except FreeCADConnectionError as e:
-            return f"CONNECTION ERROR: {e}"
+        """List all objects in the FreeCAD document, read live from FreeCAD,
+        with each object's name, label, and type.
+        Call this before writing a script, and before any operation that references
+        existing geometry (fillet, chamfer, boolean, pocket, mirror, or any object
+        you did not create in the current turn)."""
+        return _guard(lambda: _format_objects(client().list_objects()))
 
     @tool
     def clear_document() -> str:
         """Remove ALL objects from the active FreeCAD document.
         *** DESTRUCTIVE — the safety system will ask the user to confirm before this runs. ***"""
-        try:
-            client = _get_client(config)
-            client.clear_document()
+        def clear() -> str:
+            client().clear_document()
             return "Document cleared."
-        except FreeCADConnectionError as e:
-            return f"CONNECTION ERROR: {e}"
+        return _guard(clear)
 
     @tool
     def save_document(
@@ -114,14 +108,6 @@ def make_freecad_tools(config: UserConfig) -> list:
     ) -> str:
         """Save the FreeCAD document to disk.
         *** DESTRUCTIVE when saving to an existing path — confirmation required. ***"""
-        try:
-            client = _get_client(config)
-            saved = client.save_document(path)
-            return f"Document saved to: {saved}"
-        except FreeCADConnectionError as e:
-            return f"CONNECTION ERROR: {e}"
-        except RuntimeError as e:
-            return f"FREECAD ERROR: {e}"
+        return _guard(lambda: f"Document saved to: {client().save_document(path)}")
 
-    return [execute_script, get_screenshot, list_objects, get_feature_tree,
-            clear_document, save_document]
+    return [execute_script, get_screenshot, list_objects, clear_document, save_document]

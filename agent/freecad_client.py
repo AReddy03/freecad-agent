@@ -13,6 +13,7 @@ Protocol: newline-delimited JSON over TCP.
 import base64
 import json
 import socket
+import threading
 import time
 import uuid
 
@@ -26,37 +27,43 @@ class FreeCADConnectionError(Exception):
 
 
 class FreeCADClient:
-    def __init__(self, host: str = HOST, port: int = PORT):
+    def __init__(self, host: str = HOST, port: int = PORT, timeout: float = TIMEOUT):
         self.host = host
         self.port = port
+        self.timeout = timeout
         self._sock: socket.socket | None = None
-        self._buf = ""
+        self._buf = bytearray()
+        # One request/response at a time: a client may be shared across threads
+        # (e.g. several Streamlit sessions). Reentrant because _send_command
+        # connects while holding it.
+        self._lock = threading.RLock()
 
     # ------------------------------------------------------------------
     # Connection management
     # ------------------------------------------------------------------
 
     def connect(self):
-        if self._sock:
-            return
-        try:
-            self._sock = socket.create_connection((self.host, self.port), timeout=TIMEOUT)
-            self._sock.settimeout(TIMEOUT)
-        except OSError as e:
-            self._sock = None
-            raise FreeCADConnectionError(
-                f"Cannot connect to FreeCAD at {self.host}:{self.port}. "
-                "Is FreeCAD open with the MCP addon loaded?"
-            ) from e
+        with self._lock:
+            if self._sock:
+                return
+            try:
+                self._sock = socket.create_connection((self.host, self.port), timeout=self.timeout)
+            except OSError as e:
+                self._sock = None
+                raise FreeCADConnectionError(
+                    f"Cannot connect to FreeCAD at {self.host}:{self.port}. "
+                    "Is FreeCAD open with the MCP addon loaded?"
+                ) from e
 
     def disconnect(self):
-        if self._sock:
-            try:
-                self._sock.close()
-            except Exception:
-                pass
-            self._sock = None
-            self._buf = ""
+        with self._lock:
+            if self._sock:
+                try:
+                    self._sock.close()
+                except Exception:
+                    pass
+                self._sock = None
+            self._buf.clear()
 
     def is_connected(self) -> bool:
         return self._sock is not None
@@ -73,40 +80,61 @@ class FreeCADClient:
     # ------------------------------------------------------------------
 
     def _send_command(self, command: str, args: dict | None = None) -> dict:
-        if not self._sock:
+        with self._lock:
             self.connect()
 
-        msg_id = str(uuid.uuid4())
-        payload = json.dumps({"id": msg_id, "command": command, "args": args or {}})
-        try:
-            self._sock.sendall((payload + "\n").encode("utf-8"))
-        except OSError:
-            self.disconnect()
-            raise FreeCADConnectionError("Connection to FreeCAD lost while sending.")
-
-        deadline = time.monotonic() + TIMEOUT
-        while True:
-            if time.monotonic() > deadline:
-                raise FreeCADConnectionError("Timed out waiting for FreeCAD response.")
+            msg_id = str(uuid.uuid4())
+            payload = json.dumps({"id": msg_id, "command": command, "args": args or {}})
             try:
-                chunk = self._sock.recv(65536)
+                self._sock.settimeout(self.timeout)
+                self._sock.sendall((payload + "\n").encode("utf-8"))
+            except OSError as e:
+                self.disconnect()
+                raise FreeCADConnectionError("Connection to FreeCAD lost while sending.") from e
+
+            try:
+                return self._read_response(msg_id)
+            except FreeCADConnectionError:
+                # Drop the socket so the next call reconnects instead of reusing
+                # a dead connection or picking up this request's late reply.
+                self.disconnect()
+                raise
+
+    def _read_response(self, msg_id: str) -> dict:
+        deadline = time.monotonic() + self.timeout
+        scan_from = 0  # bytes before this offset are known to contain no newline
+        while True:
+            newline = self._buf.find(b"\n", scan_from)
+            if newline == -1:
+                scan_from = len(self._buf)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise FreeCADConnectionError("Timed out waiting for FreeCAD response.")
+                self._sock.settimeout(remaining)
+                try:
+                    chunk = self._sock.recv(65536)
+                except socket.timeout:
+                    raise FreeCADConnectionError("Timed out waiting for FreeCAD response.")
+                except OSError as e:
+                    raise FreeCADConnectionError(f"Connection to FreeCAD lost: {e}") from e
                 if not chunk:
                     raise FreeCADConnectionError("FreeCAD closed the connection.")
-                self._buf += chunk.decode("utf-8")
-            except socket.timeout:
-                raise FreeCADConnectionError("Socket timeout waiting for FreeCAD.")
+                self._buf += chunk
+                continue
 
-            while "\n" in self._buf:
-                line, self._buf = self._buf.split("\n", 1)
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    response = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if response.get("id") == msg_id:
-                    return response
+            # Decode whole lines only: a multi-byte UTF-8 character can be
+            # split across two recv() chunks.
+            line = bytes(self._buf[:newline]).strip()
+            del self._buf[:newline + 1]
+            scan_from = 0
+            if not line:
+                continue
+            try:
+                response = json.loads(line)
+            except ValueError:  # JSONDecodeError or UnicodeDecodeError
+                continue
+            if isinstance(response, dict) and response.get("id") == msg_id:
+                return response
 
     def _call(self, command: str, args: dict | None = None) -> dict:
         response = self._send_command(command, args)
@@ -122,9 +150,13 @@ class FreeCADClient:
         result = self._call("execute_script", {"code": code})
         return result.get("output", "")
 
-    def get_screenshot(self, direction: str = "iso") -> bytes:
+    def get_screenshot_base64(self, direction: str = "iso") -> str:
+        """Screenshot as the base64 PNG string the server sends (no decode round-trip)."""
         result = self._call("get_screenshot", {"direction": direction})
-        return base64.b64decode(result["image"])
+        return result["image"]
+
+    def get_screenshot(self, direction: str = "iso") -> bytes:
+        return base64.b64decode(self.get_screenshot_base64(direction))
 
     def list_objects(self) -> list[dict]:
         result = self._call("list_objects")

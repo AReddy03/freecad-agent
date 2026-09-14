@@ -4,7 +4,7 @@ No FreeCAD instance required.
 """
 
 import pytest
-from agent.state import append_features, make_feature_entry
+from agent.state import merge_features, make_feature_entry
 from agent.prompts import format_feature_tree_context, _MAX_CHARS, _MAX_ENTRIES
 
 
@@ -38,36 +38,57 @@ def test_make_feature_entry_values():
 
 
 # ---------------------------------------------------------------------------
-# append_features reducer
+# merge_features reducer
 # ---------------------------------------------------------------------------
 
-def test_append_features_concatenates():
+def test_merge_features_concatenates():
     a = [make_feature_entry("Box", "Part::Box", "box", "Created box", 1)]
     b = [make_feature_entry("Cyl", "Part::Cylinder", "cyl", "Created cyl", 2)]
-    result = append_features(a, b)
+    result = merge_features(a, b)
     assert len(result) == 2
     assert result[0]["name"] == "Box"
     assert result[1]["name"] == "Cyl"
 
 
-def test_append_features_does_not_drop_existing():
+def test_merge_features_does_not_drop_existing():
     existing = [make_feature_entry(f"Obj{i}", "Part::Box", f"obj{i}", "x", i) for i in range(5)]
     new = [make_feature_entry("New", "Part::Sphere", "new", "y", 6)]
-    result = append_features(existing, new)
+    result = merge_features(existing, new)
     assert len(result) == 6
     assert result[-1]["name"] == "New"
 
 
-def test_append_features_empty_new():
+def test_merge_features_empty_new():
     existing = [make_feature_entry("Box", "Part::Box", "box", "x", 1)]
-    result = append_features(existing, [])
+    result = merge_features(existing, [])
     assert result == existing
 
 
-def test_append_features_empty_existing():
+def test_merge_features_empty_existing():
     new = [make_feature_entry("Box", "Part::Box", "box", "x", 1)]
-    result = append_features([], new)
+    result = merge_features([], new)
     assert result == new
+
+
+def test_merge_features_replaces_same_name_in_place():
+    existing = [
+        make_feature_entry("Box", "Part::Box", "box", "Created box", 1),
+        make_feature_entry("Cyl", "Part::Cylinder", "cyl", "Created cyl", 2),
+    ]
+    invalidated = {**existing[0], "valid": False}
+    result = merge_features(existing, [invalidated])
+    assert [e["name"] for e in result] == ["Box", "Cyl"]
+    assert result[0]["valid"] is False
+    assert existing[0]["valid"] is True  # inputs are not mutated
+
+
+def test_merge_features_recreated_object_becomes_valid_again():
+    deleted = {**make_feature_entry("Box", "Part::Box", "box", "Created box", 1), "valid": False}
+    recreated = make_feature_entry("Box", "Part::Box", "box2", "Created box2", 5)
+    result = merge_features([deleted], [recreated])
+    assert len(result) == 1
+    assert result[0]["valid"] is True
+    assert result[0]["turn_index"] == 5
 
 
 # ---------------------------------------------------------------------------

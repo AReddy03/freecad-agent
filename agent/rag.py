@@ -7,39 +7,17 @@ Usage:
     rag_tool = build_rag_tool()   # loads or creates the ChromaDB collection
 """
 
-from pathlib import Path
 from typing import Annotated
 
-from langchain_chroma import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.tools import tool
 
-CHROMA_PATH = str(Path(__file__).parent.parent / "chroma_db")
-COLLECTION_NAME = "freecad_docs"
-EMBED_MODEL = "all-MiniLM-L6-v2"  # ~80 MB, downloads once and caches locally
-
-_vectorstore: Chroma | None = None
-
-
-def _get_vectorstore() -> Chroma:
-    global _vectorstore
-    if _vectorstore is None:
-        embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
-        _vectorstore = Chroma(
-            collection_name=COLLECTION_NAME,
-            embedding_function=embeddings,
-            persist_directory=CHROMA_PATH,
-        )
-    return _vectorstore
+from agent import vectorstore
+from agent.vectorstore import DOCS_CHROMA_PATH, DOCS_COLLECTION
 
 
 def collection_size() -> int:
     """Return the number of documents indexed."""
-    try:
-        vs = _get_vectorstore()
-        return vs._collection.count()
-    except Exception:
-        return 0
+    return vectorstore.collection_size(DOCS_COLLECTION, DOCS_CHROMA_PATH)
 
 
 def build_rag_tool():
@@ -50,7 +28,7 @@ def build_rag_tool():
     if collection_size() == 0:
         return None
 
-    vs = _get_vectorstore()
+    vs = vectorstore.get_vectorstore(DOCS_COLLECTION, DOCS_CHROMA_PATH)
 
     @tool
     def rag_search(

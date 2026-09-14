@@ -5,6 +5,8 @@ Reads sources from tutorial_sources.yaml and indexes them into a separate
 ChromaDB collection (freecad_tutorials / chroma_tutorials/) used by the
 tutorial-RAG variant of the agent.
 
+Re-running is safe: chunks have stable IDs, so existing ones are overwritten.
+
 Run:
     python scripts/ingest_tutorials.py              # ingest all sources
     python scripts/ingest_tutorials.py --clear      # wipe and re-ingest
@@ -24,80 +26,25 @@ import re
 import sys
 from pathlib import Path
 
-import requests
+PROJECT_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
 import yaml
-from bs4 import BeautifulSoup
-from langchain_chroma import Chroma
 from langchain_core.documents import Document
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from markdownify import markdownify
+
+from agent.vectorstore import TUTORIALS_CHROMA_PATH, TUTORIALS_COLLECTION
+from scripts.ingest_common import index_documents, open_vectorstore, scrape_pages
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-PROJECT_ROOT = Path(__file__).parent.parent
-CHROMA_PATH = str(PROJECT_ROOT / "chroma_tutorials")
-COLLECTION_NAME = "freecad_tutorials"
-EMBED_MODEL = "all-MiniLM-L6-v2"
 SOURCES_FILE = PROJECT_ROOT / "tutorial_sources.yaml"
-
-CHUNK_SIZE = 800
-CHUNK_OVERLAP = 150
 
 
 # ---------------------------------------------------------------------------
 # Loaders
 # ---------------------------------------------------------------------------
-
-def _scrape_html_page(url: str, source_type: str = "wiki") -> Document | None:
-    """Scrape an HTML page and convert to markdown. Works for wiki and external URLs."""
-    try:
-        resp = requests.get(url, timeout=15)
-        resp.raise_for_status()
-    except Exception as e:
-        print(f"  SKIP {url}: {e}")
-        return None
-
-    soup = BeautifulSoup(resp.text, "html.parser")
-
-    # Extract title
-    title_tag = (
-        soup.find("h1", {"id": "firstHeading"})  # MediaWiki
-        or soup.find("h1")
-        or soup.find("title")
-    )
-    title = title_tag.get_text(strip=True) if title_tag else url.split("/")[-1]
-
-    # Extract main content — try MediaWiki first, fall back to body
-    content_div = (
-        soup.find("div", {"id": "mw-content-text"})
-        or soup.find("main")
-        or soup.find("article")
-        or soup.find("body")
-    )
-    if not content_div:
-        print(f"  SKIP {url}: no content found")
-        return None
-
-    # Strip nav boxes, TOC, edit links
-    for tag in content_div.find_all(
-        ["div", "table", "span"],
-        class_=["noprint", "navbox", "toc", "mw-editsection"],
-    ):
-        tag.decompose()
-
-    text = markdownify(str(content_div), heading_style="ATX", strip=["a"]).strip()
-    if len(text) < 100:
-        print(f"  SKIP {url}: content too short")
-        return None
-
-    return Document(
-        page_content=text,
-        metadata={"source": url, "title": title, "type": source_type},
-    )
-
 
 def _load_pdf(path: Path) -> list[Document]:
     """Load a PDF file, one Document per page."""
@@ -187,7 +134,7 @@ def _extract_video_id(url_or_id: str) -> str:
 def _load_youtube(url_or_id: str) -> list[Document]:
     """Fetch YouTube transcript and return as a single Document."""
     try:
-        from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
+        from youtube_transcript_api import YouTubeTranscriptApi
     except ImportError:
         print("  ERROR: youtube-transcript-api not installed. Run: pip install youtube-transcript-api")
         return []
@@ -199,23 +146,22 @@ def _load_youtube(url_or_id: str) -> list[Document]:
         return []
 
     try:
-        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-        text = " ".join(t["text"] for t in transcript_list).strip()
-        if len(text) < 50:
-            print(f"  SKIP {video_id}: transcript too short")
-            return []
-        url = f"https://www.youtube.com/watch?v={video_id}"
-        print(f"  + YouTube:{video_id} ({len(text)} chars)")
-        return [Document(
-            page_content=text,
-            metadata={"source": url, "title": f"YouTube:{video_id}", "type": "youtube"},
-        )]
-    except (TranscriptsDisabled, NoTranscriptFound) as e:
+        # youtube-transcript-api >= 1.0: instance .fetch() replaced get_transcript()
+        transcript = YouTubeTranscriptApi().fetch(video_id)
+        text = " ".join(snippet.text for snippet in transcript).strip()
+    except Exception as e:  # includes TranscriptsDisabled / NoTranscriptFound
         print(f"  SKIP {video_id}: {e}")
         return []
-    except Exception as e:
-        print(f"  SKIP {video_id}: {e}")
+
+    if len(text) < 50:
+        print(f"  SKIP {video_id}: transcript too short")
         return []
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    print(f"  + YouTube:{video_id} ({len(text)} chars)")
+    return [Document(
+        page_content=text,
+        metadata={"source": url, "title": f"YouTube:{video_id}", "type": "youtube"},
+    )]
 
 
 def _load_local_file(path_str: str) -> list[Document]:
@@ -283,39 +229,18 @@ def main():
     if args.add_youtube:
         youtube_ids.append(args.add_youtube)
 
-    print("Loading embedding model (downloads once on first run)...")
-    embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
-    vectorstore = Chroma(
-        collection_name=COLLECTION_NAME,
-        embedding_function=embeddings,
-        persist_directory=CHROMA_PATH,
-    )
-
-    if args.clear:
-        print("Clearing existing tutorial collection...")
-        try:
-            vectorstore._collection.delete(where={"source": {"$ne": ""}})
-        except Exception:
-            pass
+    vectorstore = open_vectorstore(TUTORIALS_COLLECTION, TUTORIALS_CHROMA_PATH, clear=args.clear)
 
     raw_docs: list[Document] = []
     run_type = args.type  # None means all
 
     if run_type in (None, "wiki") and wiki_urls:
         print(f"\nScraping {len(wiki_urls)} FreeCAD wiki tutorial pages...")
-        for url in wiki_urls:
-            doc = _scrape_html_page(url, source_type="wiki")
-            if doc:
-                raw_docs.append(doc)
-                print(f"  + {doc.metadata['title']}")
+        raw_docs.extend(scrape_pages(wiki_urls, source_type="wiki"))
 
     if run_type in (None, "external") and external_urls:
         print(f"\nScraping {len(external_urls)} external URL(s)...")
-        for url in external_urls:
-            doc = _scrape_html_page(url, source_type="external")
-            if doc:
-                raw_docs.append(doc)
-                print(f"  + {doc.metadata['title']}")
+        raw_docs.extend(scrape_pages(external_urls, source_type="external"))
 
     if run_type in (None, "local") and local_files:
         print(f"\nLoading {len(local_files)} local file(s)...")
@@ -331,25 +256,9 @@ def main():
         print("\nNo documents collected. Add sources to tutorial_sources.yaml and retry.")
         sys.exit(1)
 
-    print(f"\nChunking {len(raw_docs)} document(s)...")
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=CHUNK_SIZE,
-        chunk_overlap=CHUNK_OVERLAP,
-        separators=["\n\n", "\n", " ", ""],
-    )
-    chunks = splitter.split_documents(raw_docs)
-    print(f"  -> {len(chunks)} chunks")
-
-    print("Embedding and storing in ChromaDB...")
-    batch_size = 100
-    for i in range(0, len(chunks), batch_size):
-        batch = chunks[i : i + batch_size]
-        vectorstore.add_documents(batch)
-        print(f"  {min(i + batch_size, len(chunks))}/{len(chunks)}")
-
-    total = vectorstore._collection.count()
+    total = index_documents(vectorstore, raw_docs)
     print(f"\nDone. Tutorial ChromaDB now contains {total} chunks.")
-    print(f"Location: {CHROMA_PATH}")
+    print(f"Location: {TUTORIALS_CHROMA_PATH}")
 
 
 if __name__ == "__main__":

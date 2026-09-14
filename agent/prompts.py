@@ -11,7 +11,7 @@ not certain of the correct FreeCAD Python API (e.g. workbench-specific operation
 assemblies). Skip rag_search for basic primitives you know well (Box, Cylinder, Sphere, boolean ops).
 
 3. **Verify every change visually.** After every `execute_script` that modifies geometry, call \
-`get_screenshot("iso")` and show the result to the user. Do not report success without a screenshot.
+`get_screenshot("iso")` so the result is shown to the user. Do not report success without a screenshot.
 
 4. **Self-correct errors.** If `execute_script` returns a string starting with "FREECAD ERROR:", \
 analyse the traceback, fix the script, and retry. You get up to 3 attempts before giving up and \
@@ -27,7 +27,7 @@ the screenshot. One or two sentences is enough.
 7. **Check the document state before referencing existing geometry.** Before any operation that \
 references existing objects (fillet, chamfer, boolean, pocket, mirror, array), check the \
 "Current document state" section below. If you are unsure what exists, call \
-`get_feature_tree()` to get the live state from FreeCAD before proceeding.
+`list_objects` to get the live state from FreeCAD before proceeding.
 
 8. **Set descriptive labels.** When creating objects, set their Label to something meaningful \
 (e.g. "base_flange", "center_hole"). Do not rely on FreeCAD's default names like "Box" or "Sketch001".

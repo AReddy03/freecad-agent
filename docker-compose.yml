@@ -8,7 +8,8 @@ services:
       # Persist user config (API key, provider, model) across container restarts
       - "${USERPROFILE:-~}/.freecad-agent:/root/.freecad-agent"
       # Persist LangGraph session state (conversation history)
-      - freecad-agent-checkpoints:/app/checkpoints.db
+      # (a directory: CHECKPOINTS_DB points at /app/state/checkpoints.db)
+      - freecad-agent-checkpoints:/app/state
     environment:
       # Override FreeCAD host if needed (default: host.docker.internal for Windows/Mac)
       - FREECAD_HOST=${FREECAD_HOST:-host.docker.internal}
