@@ -17,9 +17,11 @@ from streamlit.testing.v1 import AppTest
 import agent.config as config_module
 import agent.graph as graph_module
 import agent.llm as llm_module
+import agent.memory as memory_module
 import agent.rag as rag_module
 import agent.tools as tools_module
 import agent.tutorial_rag as tutorial_rag_module
+from agent.memory import MemoryStore
 from tests.test_graph import FakeFreeCAD, ScriptedLLM, ai_tool
 
 APP_PATH = str(Path(__file__).parent.parent / "ui" / "app.py")
@@ -48,6 +50,9 @@ def app(monkeypatch, tmp_path):
     monkeypatch.setattr(rag_module, "collection_size", lambda: 0)
     monkeypatch.setattr(tutorial_rag_module, "collection_size", lambda: 0)
     monkeypatch.setattr(llm_module, "get_ollama_models", lambda: None)
+    # Keep the app away from the real ~/.freecad-agent/memory.db
+    memory_store = MemoryStore(db_path=tmp_path / "memory.db")
+    monkeypatch.setattr(memory_module, "get_memory_store", lambda *args, **kwargs: memory_store)
 
     st.cache_data.clear()
     st.cache_resource.clear()

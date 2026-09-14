@@ -30,7 +30,14 @@ from langgraph.types import interrupt
 from agent.config import UserConfig
 from agent.history import steps_since_last_human, trim_history
 from agent.llm import get_llm
-from agent.prompts import SYSTEM_PROMPT, format_feature_tree_context, format_tutorial_context
+from agent.prompts import (
+    SYSTEM_PROMPT,
+    format_feature_tree_context,
+    format_matched_skills_context,
+    format_memory_context,
+    format_skills_index,
+    format_tutorial_context,
+)
 from agent.safety import confirmation_message, is_destructive
 from agent.state import AgentState, make_feature_entry
 from agent.tools import get_client, make_freecad_tools
@@ -39,7 +46,10 @@ CHECKPOINTS_PATH = Path(
     os.environ.get("CHECKPOINTS_DB") or Path(__file__).parent.parent / "checkpoints.db"
 )
 MAX_ITERATIONS = 20  # hard stop per user message to prevent infinite loops
-TUTORIAL_CACHE_SIZE = 64
+QUERY_CACHE_SIZE = 64  # per-query tutorial / matched-skill results kept per graph
+
+# Track which turn_index values have already had a summary saved, to avoid duplicates.
+_saved_summary_turns: set = set()
 
 _checkpointer: SqliteSaver | None = None
 _checkpointer_lock = threading.Lock()
@@ -60,18 +70,19 @@ def get_checkpointer() -> SqliteSaver:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _system_message(dynamic_context: str, cache_static_prompt: bool) -> SystemMessage:
+def _system_message(static_prompt: str, dynamic_context: str, cache_static_prompt: bool) -> SystemMessage:
     """
     Static prompt first, per-turn context after it.
 
     With Anthropic, the static block carries a cache breakpoint so the tool
-    schemas + SYSTEM_PROMPT prefix is served from the prompt cache; the feature
-    tree changes often, so it lives in a separate block after the breakpoint.
+    schemas + static prompt prefix is served from the prompt cache; memory,
+    matched skills, tutorials and the feature tree change between calls, so
+    they live in a separate block after the breakpoint.
     """
     if not cache_static_prompt:
-        return SystemMessage(content=f"{SYSTEM_PROMPT}\n\n{dynamic_context}")
+        return SystemMessage(content=f"{static_prompt}\n\n{dynamic_context}")
     return SystemMessage(content=[
-        {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": static_prompt, "cache_control": {"type": "ephemeral"}},
         {"type": "text", "text": dynamic_context},
     ])
 
@@ -113,11 +124,52 @@ def _with_screenshot(result: dict) -> dict:
     return {**result, "last_screenshot": screenshot} if screenshot else result
 
 
+def _maybe_save_session_summary(memory_store, state, final_answer: str) -> None:
+    """
+    Save a compact session summary to long-term memory when the agent
+    produces a terminal answer (no tool calls) and the feature tree is non-empty.
+    Only saved once per turn_index to prevent duplicates on graph re-runs.
+    Errors are silently swallowed — memory failure must never crash the graph.
+    """
+    from agent.memory import MemoryType
+
+    turn = state.get("turn_index", 0)
+    if turn in _saved_summary_turns:
+        return
+
+    try:
+        last_human = _latest_human_text(state["messages"])[:120] or "(no prompt)"
+        feature_tree = state.get("feature_tree") or []
+        obj_count = len([e for e in feature_tree if e.get("valid", True)])
+
+        summary = (
+            f"Task: {last_human} | "
+            f"Objects created: {obj_count} | "
+            f"Result: {final_answer[:200]}"
+        )
+        memory_store.save(
+            content=summary,
+            memory_type=MemoryType.SESSION_SUMMARY,
+            importance=1.0,
+            session_id=str(turn),
+        )
+        _saved_summary_turns.add(turn)
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Graph
 # ---------------------------------------------------------------------------
 
-def build_graph(config: UserConfig, rag_tool=None, tutorial_retriever=None, checkpointer=None):
+def build_graph(
+    config: UserConfig,
+    rag_tool=None,
+    tutorial_retriever=None,
+    memory_store=None,
+    skills_registry=None,
+    checkpointer=None,
+):
     """
     Build and compile the agent graph for the given user config.
 
@@ -125,42 +177,79 @@ def build_graph(config: UserConfig, rag_tool=None, tutorial_retriever=None, chec
         config:             user's LLM provider / model / API key config
         rag_tool:           optional LangChain @tool for RAG search (added when ChromaDB is ready)
         tutorial_retriever: optional retriever whose results are injected into the system prompt
+        memory_store:       optional MemoryStore for cross-session memory
+        skills_registry:    optional SkillsRegistry for CAD best-practice skills
         checkpointer:       defaults to the shared SQLite checkpointer
     """
-    freecad_tools = make_freecad_tools(config)
+    freecad_tools = make_freecad_tools(config, memory_store=memory_store, skills_registry=skills_registry)
     all_tools = freecad_tools + ([rag_tool] if rag_tool else [])
 
     llm = get_llm(config).bind_tools(all_tools)
     tool_node = ToolNode(all_tools)
     cache_static_prompt = config.provider == "anthropic"
 
-    @lru_cache(maxsize=TUTORIAL_CACHE_SIZE)
+    # The skills index only depends on the registry, which is fixed for the
+    # graph's lifetime — so it belongs in the cacheable static prompt.
+    skills_index = ""
+    if skills_registry is not None:
+        try:
+            skills_index = format_skills_index(skills_registry)
+        except Exception:
+            pass
+    static_prompt = "\n\n".join(part for part in (SYSTEM_PROMPT, skills_index) if part)
+
+    # Tutorials and matched skills are keyed on the latest user message, which
+    # stays the same for every reason step of a turn — compute once, not per step.
+    @lru_cache(maxsize=QUERY_CACHE_SIZE)
     def tutorial_context_for(query: str) -> str:
-        # The query is the latest user message, which stays the same for every
-        # reason step of a turn — retrieve once, not once per step.
         return format_tutorial_context(tutorial_retriever.invoke(query))
+
+    @lru_cache(maxsize=QUERY_CACHE_SIZE)
+    def matched_skills_for(query: str) -> str:
+        return format_matched_skills_context(skills_registry.match_skills(query, top_k=2))
 
     # -----------------------------------------------------------------------
     # Nodes
     # -----------------------------------------------------------------------
 
     def reason(state: AgentState) -> dict:
-        """Ask the LLM what to do next, injecting feature tree and optional tutorial context."""
+        """Ask the LLM what to do next, injecting memory, skills, tutorials, and feature tree."""
         history = [m for m in state["messages"] if not isinstance(m, SystemMessage)]
+        feature_tree = state.get("feature_tree") or []
+        query = _latest_human_text(history)
 
+        # Order: memory → matched skills → tutorials → feature tree
         context_parts = []
-        if tutorial_retriever is not None:
-            query = _latest_human_text(history)
-            if query:
-                try:
-                    context_parts.append(tutorial_context_for(query))
-                except Exception:
-                    pass  # retrieval failure is non-fatal
-        context_parts.append(format_feature_tree_context(state.get("feature_tree") or []))
+        if memory_store is not None:
+            # Not cached: memory_save can change it in the middle of a turn.
+            try:
+                context_parts.append(format_memory_context(memory_store, query=query))
+            except Exception:
+                pass  # memory failure is non-fatal
+        if skills_registry is not None and query:
+            try:
+                context_parts.append(matched_skills_for(query))
+            except Exception:
+                pass
+        if tutorial_retriever is not None and query:
+            try:
+                context_parts.append(tutorial_context_for(query))
+            except Exception:
+                pass  # retrieval failure is non-fatal
+        context_parts.append(format_feature_tree_context(feature_tree))
         dynamic_context = "\n\n".join(part for part in context_parts if part)
 
-        messages = [_system_message(dynamic_context, cache_static_prompt)] + trim_history(history)
+        messages = [_system_message(static_prompt, dynamic_context, cache_static_prompt)]
+        messages += trim_history(history)
         response = llm.invoke(messages)
+
+        # Auto-save a session summary when the agent produces a terminal answer
+        # (no tool calls) and real work was done (feature_tree is non-empty).
+        if memory_store is not None:
+            tool_calls = getattr(response, "tool_calls", []) or []
+            if not tool_calls and feature_tree and isinstance(response.content, str):
+                _maybe_save_session_summary(memory_store, state, response.content)
+
         return {
             "messages": [response],
             "iteration": steps_since_last_human(history) + 1,

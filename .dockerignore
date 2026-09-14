@@ -15,7 +15,8 @@ checkpoints.db
 tests/
 logs/
 eval_results/
-skills/
+# skills/ ships in the image (SkillsRegistry reads it); skip stray local copies
+skills/mnt/
 *.zip
 *.FCStd
 .env

@@ -44,7 +44,129 @@ references existing objects (fillet, chamfer, boolean, pocket, mirror, array), c
 
 _MAX_CHARS = 3200        # ~800 tokens at 4 chars/token
 _MAX_ENTRIES = 30
-_MAX_TUTORIAL_CHARS = 900  # 3 chunks × ~300 chars each — injected every turn, keep tight
+_MAX_TUTORIAL_CHARS = 900   # 3 chunks × ~300 chars each — injected every turn, keep tight
+_MAX_MEMORY_CHARS = 1200    # ~300 tokens; preferences + recent summaries
+_MAX_SKILLS_CHARS = 2000    # matched skill body — up to 2 skills × ~1000 chars each
+_MAX_SKILLS_INDEX_CHARS = 600  # brief skills listing in system prompt
+
+
+def format_memory_context(memory_store, query: str = "") -> str:
+    """
+    Build the memory section for the system prompt.
+    Called every turn from the reason node — no LLM calls, pure SQL.
+
+    Sections (each omitted when empty):
+      ## Long-term memory
+      ### User preferences       — all PREFERENCE memories, high-importance first
+      ### Past sessions          — 3 most recent SESSION_SUMMARY memories
+      ### Relevant memories      — FTS5 search results for current query
+    """
+    from agent.memory import MemoryType  # local import avoids circular at module level
+
+    lines = []
+
+    # --- Preferences (always shown) ---
+    try:
+        prefs = memory_store.get_all_preferences()
+    except Exception:
+        prefs = []
+
+    pref_lines = []
+    for p in prefs[:10]:
+        pref_lines.append(f"- {p['content']}")
+
+    # --- Session summaries ---
+    try:
+        summaries = memory_store.get_session_summaries(limit=3)
+    except Exception:
+        summaries = []
+
+    summary_lines = []
+    for s in summaries:
+        date = s["created_at"][:10]
+        summary_lines.append(f"- [{date}] {s['content'][:120]}")
+
+    # --- Relevant to current query (FTS5) ---
+    relevant_lines = []
+    shown_ids = {p["id"] for p in prefs} | {s["id"] for s in summaries}
+    if query.strip():
+        try:
+            relevant = memory_store.search(query, memory_type=None, limit=5)
+            for r in relevant:
+                if r["id"] not in shown_ids:
+                    relevant_lines.append(f"- [{r['memory_type']}] {r['content'][:150]}")
+        except Exception:
+            pass
+
+    if not pref_lines and not summary_lines and not relevant_lines:
+        return ""
+
+    lines.append("## Long-term memory")
+    if pref_lines:
+        lines.append("### User preferences")
+        lines.extend(pref_lines)
+    if summary_lines:
+        lines.append("### Past sessions")
+        lines.extend(summary_lines)
+    if relevant_lines:
+        lines.append("### Relevant memories")
+        lines.extend(relevant_lines)
+
+    result = "\n".join(lines)
+    if len(result) > _MAX_MEMORY_CHARS:
+        result = result[:_MAX_MEMORY_CHARS] + "\n[... memory truncated ...]"
+    return result
+
+
+def format_skills_index(skills_registry) -> str:
+    """
+    Build a brief skills index for the system prompt — just names and one-liner descriptions.
+    Always injected so the agent knows what skills are available.
+    The agent can call `skill_search` to retrieve full skill content on demand.
+    """
+    skills = skills_registry.list_all()
+    if not skills:
+        return ""
+
+    lines = ["## Available CAD skills (call skill_search to get full guidance)"]
+    for s in skills[:20]:
+        # Truncate description to first sentence
+        first_sentence = s["description"].split(".")[0].strip()
+        lines.append(f"- `{s['name']}`: {first_sentence[:100]}")
+
+    result = "\n".join(lines)
+    if len(result) > _MAX_SKILLS_INDEX_CHARS:
+        result = result[:_MAX_SKILLS_INDEX_CHARS] + "\n[... more skills available ...]"
+    return result
+
+
+def format_matched_skills_context(skills: list) -> str:
+    """
+    Format the content of skills that matched the current query.
+    Injects up to 2 matched skills, capped at _MAX_SKILLS_CHARS total.
+    Each skill: header + full markdown content.
+    """
+    if not skills:
+        return ""
+
+    lines = ["## Relevant CAD design guidance (from skills library)"]
+    remaining = _MAX_SKILLS_CHARS - len(lines[0])
+
+    for skill in skills[:2]:
+        header = f"\n### Skill: {skill.name}"
+        body = skill.content.strip()
+        chunk = header + "\n" + body
+        if remaining <= 0:
+            break
+        if len(chunk) > remaining:
+            chunk = chunk[:remaining] + "\n[... truncated ...]"
+        lines.append(chunk)
+        remaining -= len(chunk)
+
+    if len(lines) == 1:
+        return ""
+
+    return "\n".join(lines)
 
 
 def format_tutorial_context(docs: list) -> str:

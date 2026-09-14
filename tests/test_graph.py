@@ -7,6 +7,7 @@ services, so these run without API keys or a FreeCAD instance.
 
 import base64
 import itertools
+from pathlib import Path
 
 import pytest
 from langchain_core.documents import Document
@@ -19,7 +20,9 @@ from pydantic import Field
 import agent.graph as graph_module
 import agent.tools as tools_module
 from agent.config import UserConfig
+from agent.memory import MemoryStore, MemoryType
 from agent.prompts import SYSTEM_PROMPT
+from agent.skills import Skill
 
 SCREENSHOT_B64 = base64.b64encode(b"\x89PNG" + b"x" * 5000).decode()
 _call_ids = itertools.count()
@@ -253,6 +256,55 @@ def test_anthropic_system_prompt_has_cache_breakpoint(monkeypatch, freecad):
     static, dynamic = llm.prompts[0][0].content
     assert static == {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
     assert "Current document state" in dynamic["text"]
+
+
+class FakeSkills:
+    def __init__(self):
+        self.match_calls = 0
+
+    def list_all(self) -> list[dict]:
+        return [{"name": "sketching", "description": "Sketch constraints guidance. Details."}]
+
+    def match_skills(self, query: str, top_k: int = 2) -> list[Skill]:
+        self.match_calls += 1
+        return [Skill(name="sketching", description="", content="Fully constrain every sketch.", path=Path("SKILL.md"))]
+
+    def skill_names(self) -> list[str]:
+        return ["sketching"]
+
+
+def test_skills_index_is_static_and_matched_skills_are_computed_once(monkeypatch, freecad):
+    skills = FakeSkills()
+    graph, llm = make_graph(
+        monkeypatch,
+        [ai_tool("list_objects"), ai_tool("list_objects"), AIMessage("done")],
+        provider="anthropic",
+        skills_registry=skills,
+    )
+    ask(graph, "sketch a bracket", thread())
+
+    static, dynamic = llm.prompts[0][0].content
+    assert static["text"].startswith(SYSTEM_PROMPT)
+    assert "`sketching`" in static["text"]          # index sits in the cached block
+    assert "Fully constrain every sketch." in dynamic["text"]
+    assert skills.match_calls == 1                  # 3 reason steps, 1 match
+
+
+def test_memory_is_injected_and_session_summary_saved(monkeypatch, freecad, tmp_path):
+    store = MemoryStore(db_path=tmp_path / "memory.db")
+    store.save("User prefers millimetres", MemoryType.PREFERENCE)
+    monkeypatch.setattr(graph_module, "_saved_summary_turns", set())
+    graph, llm = make_graph(
+        monkeypatch,
+        [ai_tool("execute_script", code="add Box"), AIMessage("Built a box.")],
+        memory_store=store,
+    )
+    ask(graph, "build a box", thread())
+
+    assert "User prefers millimetres" in llm.prompts[0][0].content
+    summaries = store.get_session_summaries()
+    assert len(summaries) == 1
+    assert "build a box" in summaries[0]["content"]
 
 
 def test_other_providers_get_plain_system_prompt(monkeypatch, freecad):

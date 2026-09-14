@@ -53,6 +53,7 @@ FROM base AS app
 COPY agent/ agent/
 COPY ui/ ui/
 COPY scripts/ scripts/
+COPY skills/ skills/
 
 # Pre-built vector stores and the embedding model cache from stage 2
 COPY --from=ingest /app/chroma_db ./chroma_db

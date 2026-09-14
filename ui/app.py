@@ -64,10 +64,18 @@ def _build_graph(config_json: str, docs_ready: bool, tutorials_ready: bool):
     session only needs a new thread_id — not a new graph.
     """
     from agent.graph import build_graph
+    from agent.memory import get_memory_store
+    from agent.skills import get_skills_registry
     cfg = UserConfig.model_validate_json(config_json)
     rag_tool = rag.build_rag_tool() if docs_ready else None
     tutorial_retriever = tutorial_rag.build_tutorial_retriever() if tutorials_ready else None
-    return build_graph(cfg, rag_tool=rag_tool, tutorial_retriever=tutorial_retriever)
+    return build_graph(
+        cfg,
+        rag_tool=rag_tool,
+        tutorial_retriever=tutorial_retriever,
+        memory_store=get_memory_store(),
+        skills_registry=get_skills_registry(),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +237,45 @@ with st.sidebar:
     if tutorials_count > 0:
         st.success(f"Tutorials: {tutorials_count} chunks")
 
+    # Memory status
+    st.divider()
+    st.subheader("Memory")
+    try:
+        from agent.memory import get_memory_store
+        _ms = get_memory_store()
+        _n_mem = _ms.count()
+        if _n_mem == 0:
+            st.info("No memories yet. The agent learns as you work.")
+        else:
+            st.success(f"{_n_mem} memor{'y' if _n_mem == 1 else 'ies'} stored")
+        with st.expander("View recent memories", expanded=False):
+            _recent = _ms.get_recent(limit=10)
+            if _recent:
+                for _m in _recent:
+                    st.caption(f"[{_m['memory_type']}] {_m['content'][:100]}")
+            else:
+                st.caption("Nothing saved yet.")
+    except Exception as _e:
+        st.warning(f"Memory store unavailable: {_e}")
+
+    # Skills status
+    st.divider()
+    st.subheader("Skills")
+    try:
+        from agent.skills import get_skills_registry
+        _sr = get_skills_registry()
+        _all_skills = _sr.list_all()
+        if _all_skills:
+            st.success(f"{len(_all_skills)} skill{'s' if len(_all_skills) != 1 else ''} loaded")
+        else:
+            st.warning("No skills loaded. Add SKILL.md files to the skills/ directory.")
+        with st.expander("Browse skills", expanded=False):
+            for _s in _all_skills:
+                first_sentence = _s["description"].split(".")[0].strip()
+                st.caption(f"**{_s['name']}** — {first_sentence[:80]}")
+    except Exception as _e:
+        st.warning(f"Skills registry unavailable: {_e}")
+
     # Session controls
     st.divider()
     if st.button("New Session", use_container_width=True):
@@ -270,12 +317,14 @@ def _get_graph():
 # ---------------------------------------------------------------------------
 
 _TOOL_LABELS = {
-    "execute_script":  "⚙️ Executing script",
-    "get_screenshot":  "📸 Taking screenshot",
-    "list_objects":    "🔍 Listing objects",
-    "rag_search":      "📚 Searching docs",
-    "clear_document":  "🗑️ Clearing document",
-    "save_document":   "💾 Saving document",
+    "execute_script": "⚙️ Executing script",
+    "get_screenshot": "📸 Taking screenshot",
+    "list_objects":   "🔍 Listing objects",
+    "rag_search":     "📚 Searching docs",
+    "clear_document": "🗑️ Clearing document",
+    "save_document":  "💾 Saving document",
+    "memory_save":    "🧠 Saving to memory",
+    "skill_search":   "🔧 Searching skills library",
 }
 
 
