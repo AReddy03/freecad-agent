@@ -39,9 +39,26 @@ def make_feature_entry(
 # Reducer
 # ---------------------------------------------------------------------------
 
-def append_features(existing: list, new: list) -> list:
-    """LangGraph reducer — feature_tree is append-only."""
-    return existing + new
+def merge_features(existing: list, new: list) -> list:
+    """
+    LangGraph reducer for feature_tree, keyed by object name.
+
+    An entry whose name is already in the tree replaces that entry in place
+    (e.g. marking it invalid after a delete, or re-creating an object under a
+    previously deleted name); entries with new names are appended.
+    """
+    if not new:
+        return existing
+    merged = list(existing)
+    index = {e["name"]: i for i, e in enumerate(merged)}
+    for entry in new:
+        i = index.get(entry["name"])
+        if i is None:
+            index[entry["name"]] = len(merged)
+            merged.append(entry)
+        else:
+            merged[i] = entry
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -50,9 +67,9 @@ def append_features(existing: list, new: list) -> list:
 
 class AgentState(TypedDict):
     messages:        Annotated[list[BaseMessage], add_messages]
-    last_screenshot: str | None
-    iteration:       int
-    feature_tree:    Annotated[list[dict], append_features]
+    last_screenshot: str | None  # base64 PNG
+    iteration:       int         # LLM steps since the latest user message
+    feature_tree:    Annotated[list[dict], merge_features]
     turn_index:      int
     # Pre-formatted strings injected into the system prompt each turn.
     # Computed live in the reason node closure; not serialized as Python objects.

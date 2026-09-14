@@ -97,15 +97,10 @@ def run_test(case: TestCase, config: UserConfig | None = None) -> RunMetrics:
                 last_screenshot = event["last_screenshot"]
 
     except Exception as e:
-        err_str = str(e)
-        if "interrupt" in err_str.lower() or "GraphInterrupt" in type(e).__name__:
-            interrupted = True
-        else:
-            metrics.error = err_str
+        metrics.error = str(e)
 
     metrics.duration = round(time.perf_counter() - start, 3)
     metrics.first_token_latency = round(first_token_time or 0.0, 3)
-    metrics.interrupted = interrupted
     metrics.screenshot_b64 = last_screenshot
 
     # ------------------------------------------------------------------
@@ -113,10 +108,14 @@ def run_test(case: TestCase, config: UserConfig | None = None) -> RunMetrics:
     # ------------------------------------------------------------------
     try:
         state = graph.get_state(run_config)
+        # An interrupt() pauses the run without raising; it shows up as a
+        # pending task on the checkpointed state.
+        interrupted = any(task.interrupts for task in state.tasks)
         messages = state.values.get("messages", [])
         _analyse_messages(messages, metrics)
     except Exception:
         pass
+    metrics.interrupted = interrupted
 
     # ------------------------------------------------------------------
     # Safety test: just check interrupt was triggered

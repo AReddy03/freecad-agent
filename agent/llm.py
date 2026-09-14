@@ -7,6 +7,8 @@ imports provider-specific classes.
 from langchain_core.language_models import BaseChatModel
 from agent.config import UserConfig
 
+OLLAMA_URL = "http://localhost:11434"
+
 
 def get_llm(config: UserConfig) -> BaseChatModel:
     match config.provider:
@@ -38,26 +40,19 @@ def get_llm(config: UserConfig) -> BaseChatModel:
             raise ValueError(f"Unknown LLM provider: {config.provider!r}")
 
 
-def list_ollama_models() -> list[str]:
-    """Return locally available Ollama model names, or [] if Ollama is not running."""
+def get_ollama_models() -> list[str] | None:
+    """
+    Return locally pulled Ollama model names, or None if Ollama isn't reachable.
+    A single request answers both "is it running?" and "which models?".
+    """
     try:
         import requests
-        resp = requests.get("http://localhost:11434/api/tags", timeout=2)
-        if resp.status_code == 200:
-            return [m["name"] for m in resp.json().get("models", [])]
+        resp = requests.get(f"{OLLAMA_URL}/api/tags", timeout=2)
     except Exception:
-        pass
-    return []
-
-
-def is_ollama_running() -> bool:
-    return bool(list_ollama_models()) or _ollama_ping()
-
-
-def _ollama_ping() -> bool:
+        return None
+    if resp.status_code != 200:
+        return []  # something answered, but it can't list models
     try:
-        import requests
-        resp = requests.get("http://localhost:11434/", timeout=2)
-        return resp.status_code == 200
+        return [m["name"] for m in resp.json().get("models", [])]
     except Exception:
-        return False
+        return []

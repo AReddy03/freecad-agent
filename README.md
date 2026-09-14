@@ -26,8 +26,8 @@ python -m venv .venv
 .venv\Scripts\activate        # Windows
 source .venv/bin/activate     # macOS/Linux
 
-# 3. Dependencies
-pip install -r requirements.txt
+# 3. Dependencies (runtime + ingestion; use requirements-dev.txt to also run tests)
+pip install -r requirements-ingest.txt
 
 # 4. Build knowledge base (downloads FreeCAD docs, ~5 min first run)
 python scripts/ingest.py
@@ -77,6 +77,6 @@ That's all — the rest of the codebase is provider-agnostic.
 Edit `scripts/ingest.py`:
 - Add URLs to `WIKI_PAGES` for additional wiki pages
 - Add sub-folder names to `GITHUB_INCLUDE_DIRS` for GitHub doc sections
-- Or add an entirely new source block following the `_scrape_wiki_page` pattern
+- Or add an entirely new source block using the helpers in `scripts/ingest_common.py`
 
 Re-run `python scripts/ingest.py` (or rebuild the Docker image) to update the knowledge base.

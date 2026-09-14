@@ -46,10 +46,10 @@ def test_chromadb():
 
 
 def test_ollama():
-    from agent.llm import is_ollama_running, list_ollama_models
-    if not is_ollama_running():
+    from agent.llm import get_ollama_models
+    models = get_ollama_models()
+    if models is None:
         raise RuntimeError("Ollama is not running")
-    models = list_ollama_models()
     return f"{len(models)} model(s): {', '.join(models[:3])}"
 
 
