@@ -7,6 +7,7 @@ services, so these run without API keys or a FreeCAD instance.
 
 import base64
 import itertools
+import json
 from pathlib import Path
 
 import pytest
@@ -293,7 +294,7 @@ def test_skills_index_is_static_and_matched_skills_are_computed_once(monkeypatch
 def test_memory_is_injected_and_session_summary_saved(monkeypatch, freecad, tmp_path):
     store = MemoryStore(db_path=tmp_path / "memory.db")
     store.save("User prefers millimetres", MemoryType.PREFERENCE)
-    monkeypatch.setattr(graph_module, "_saved_summary_turns", set())
+    monkeypatch.setattr(graph_module, "_saved_summaries", set())
     graph, llm = make_graph(
         monkeypatch,
         [ai_tool("execute_script", code="add Box"), AIMessage("Built a box.")],
@@ -305,6 +306,27 @@ def test_memory_is_injected_and_session_summary_saved(monkeypatch, freecad, tmp_
     summaries = store.get_session_summaries()
     assert len(summaries) == 1
     assert "build a box" in summaries[0]["content"]
+
+
+def test_session_summaries_are_deduplicated_per_thread(monkeypatch, freecad, tmp_path):
+    store = MemoryStore(db_path=tmp_path / "memory.db")
+    monkeypatch.setattr(graph_module, "_saved_summaries", set())
+    graph, _ = make_graph(
+        monkeypatch,
+        [
+            ai_tool("execute_script", code="add Box"), AIMessage("Built a box."),
+            ai_tool("execute_script", code="add Cyl"), AIMessage("Built a cylinder."),
+        ],
+        memory_store=store,
+    )
+
+    # Two sessions whose terminal answers land on the same turn_index
+    ask(graph, "build a box", thread("session-a"))
+    ask(graph, "build a cylinder", thread("session-b"))
+
+    summaries = store.get_session_summaries()
+    assert len(summaries) == 2
+    assert {json.loads(s["metadata"])["session_id"] for s in summaries} == {"session-a", "session-b"}
 
 
 def test_other_providers_get_plain_system_prompt(monkeypatch, freecad):

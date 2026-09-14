@@ -22,6 +22,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
@@ -48,8 +49,10 @@ CHECKPOINTS_PATH = Path(
 MAX_ITERATIONS = 20  # hard stop per user message to prevent infinite loops
 QUERY_CACHE_SIZE = 64  # per-query tutorial / matched-skill results kept per graph
 
-# Track which turn_index values have already had a summary saved, to avoid duplicates.
-_saved_summary_turns: set = set()
+# (thread_id, turn_index) pairs that already have a session summary, to avoid
+# duplicates. turn_index restarts at 0 in every thread, so it can't be the key alone.
+_saved_summaries: set[tuple[str, int]] = set()
+_saved_summaries_lock = threading.Lock()
 
 _checkpointer: SqliteSaver | None = None
 _checkpointer_lock = threading.Lock()
@@ -124,18 +127,20 @@ def _with_screenshot(result: dict) -> dict:
     return {**result, "last_screenshot": screenshot} if screenshot else result
 
 
-def _maybe_save_session_summary(memory_store, state, final_answer: str) -> None:
+def _maybe_save_session_summary(memory_store, state, final_answer: str, thread_id: str) -> None:
     """
     Save a compact session summary to long-term memory when the agent
     produces a terminal answer (no tool calls) and the feature tree is non-empty.
-    Only saved once per turn_index to prevent duplicates on graph re-runs.
+    Only saved once per (thread, turn) to prevent duplicates on graph re-runs.
     Errors are silently swallowed — memory failure must never crash the graph.
     """
     from agent.memory import MemoryType
 
-    turn = state.get("turn_index", 0)
-    if turn in _saved_summary_turns:
-        return
+    key = (thread_id, state.get("turn_index", 0))
+    with _saved_summaries_lock:
+        if key in _saved_summaries:
+            return
+        _saved_summaries.add(key)
 
     try:
         last_human = _latest_human_text(state["messages"])[:120] or "(no prompt)"
@@ -151,11 +156,11 @@ def _maybe_save_session_summary(memory_store, state, final_answer: str) -> None:
             content=summary,
             memory_type=MemoryType.SESSION_SUMMARY,
             importance=1.0,
-            session_id=str(turn),
+            session_id=thread_id,
         )
-        _saved_summary_turns.add(turn)
     except Exception:
-        pass
+        with _saved_summaries_lock:
+            _saved_summaries.discard(key)  # allow a retry on the next terminal answer
 
 
 # ---------------------------------------------------------------------------
@@ -212,8 +217,12 @@ def build_graph(
     # Nodes
     # -----------------------------------------------------------------------
 
-    def reason(state: AgentState) -> dict:
+    def reason(state: AgentState, config: RunnableConfig) -> dict:
         """Ask the LLM what to do next, injecting memory, skills, tutorials, and feature tree."""
+        # `config` here is LangGraph's per-run config (injected by parameter
+        # name), not the UserConfig passed to build_graph.
+        thread_id = str(config.get("configurable", {}).get("thread_id", ""))
+
         history = [m for m in state["messages"] if not isinstance(m, SystemMessage)]
         feature_tree = state.get("feature_tree") or []
         query = _latest_human_text(history)
@@ -248,7 +257,7 @@ def build_graph(
         if memory_store is not None:
             tool_calls = getattr(response, "tool_calls", []) or []
             if not tool_calls and feature_tree and isinstance(response.content, str):
-                _maybe_save_session_summary(memory_store, state, response.content)
+                _maybe_save_session_summary(memory_store, state, response.content, thread_id)
 
         return {
             "messages": [response],
