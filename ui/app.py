@@ -66,6 +66,7 @@ def _build_graph(config_json: str, docs_ready: bool, tutorials_ready: bool):
     from agent.graph import build_graph
     from agent.memory import get_memory_store
     from agent.skills import get_skills_registry
+    from agent.audit import get_audit_store
     cfg = UserConfig.model_validate_json(config_json)
     rag_tool = rag.build_rag_tool() if docs_ready else None
     tutorial_retriever = tutorial_rag.build_tutorial_retriever() if tutorials_ready else None
@@ -75,6 +76,7 @@ def _build_graph(config_json: str, docs_ready: bool, tutorials_ready: bool):
         tutorial_retriever=tutorial_retriever,
         memory_store=get_memory_store(),
         skills_registry=get_skills_registry(),
+        audit_store=get_audit_store(),
     )
 
 
@@ -275,6 +277,33 @@ with st.sidebar:
                 st.caption(f"**{_s['name']}** — {first_sentence[:80]}")
     except Exception as _e:
         st.warning(f"Skills registry unavailable: {_e}")
+
+    # Audit trail status
+    st.divider()
+    st.subheader("Audit Trail")
+    try:
+        from agent.audit import get_audit_store
+        _audit = get_audit_store()
+        _n_events = _audit.count()
+        if _n_events == 0:
+            st.info("No actions logged yet.")
+        else:
+            st.success(f"{_n_events} event{'s' if _n_events != 1 else ''} logged")
+        with st.expander("View recent actions", expanded=False):
+            _recent_events = _audit.get_events(thread_id=st.session_state.thread_id, limit=20)
+            if _recent_events:
+                for _ev in _recent_events:
+                    st.caption(f"[{_ev['event_type']}] {_ev.get('tool_name') or ''} — {_ev['created_at']}")
+            else:
+                st.caption("Nothing logged yet for this session.")
+            if st.button("Verify chain integrity", key="verify_audit_chain"):
+                _result = _audit.verify_chain()
+                if _result.valid:
+                    st.success(f"Verified {_result.checked} record(s) — chain intact.")
+                else:
+                    st.error(f"Tamper detected at record id {_result.first_invalid_id}.")
+    except Exception as _e:
+        st.warning(f"Audit store unavailable: {_e}")
 
     # Session controls
     st.divider()
