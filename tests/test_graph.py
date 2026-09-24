@@ -20,6 +20,7 @@ from pydantic import Field
 
 import agent.graph as graph_module
 import agent.tools as tools_module
+from agent.audit import AuditEventType, AuditStore
 from agent.config import UserConfig
 from agent.memory import MemoryStore, MemoryType
 from agent.prompts import SYSTEM_PROMPT
@@ -220,6 +221,123 @@ def test_feature_tree_tracks_deletes_and_recreation(monkeypatch, freecad):
     state = ask(graph, "bring the box back", cfg)
     assert {e["name"]: e["valid"] for e in state["feature_tree"]} == {"Box": True, "Cyl": True}
     assert len(state["feature_tree"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# Audit trail
+# ---------------------------------------------------------------------------
+
+def test_tool_calls_are_audited(monkeypatch, freecad, tmp_path):
+    audit_store = AuditStore(db_path=tmp_path / "audit.db")
+    graph, _ = make_graph(
+        monkeypatch,
+        [ai_tool("execute_script", code="add Box"), AIMessage("done")],
+        audit_store=audit_store,
+    )
+    ask(graph, "build a box", thread())
+
+    started = audit_store.get_events(event_type=AuditEventType.TOOL_CALL_STARTED)
+    completed = audit_store.get_events(event_type=AuditEventType.TOOL_CALL_COMPLETED)
+    assert len(started) == 1
+    assert len(completed) == 1
+    assert started[0]["tool_name"] == "execute_script"
+    assert started[0]["tool_call_id"] == completed[0]["tool_call_id"]
+    assert started[0]["thread_id"] == "t"
+
+
+def test_confirmation_flow_is_audited_without_duplication(monkeypatch, freecad, tmp_path):
+    audit_store = AuditStore(db_path=tmp_path / "audit.db")
+    graph, _ = make_graph(
+        monkeypatch,
+        [ai_tool("clear_document"), AIMessage("cleared")],
+        audit_store=audit_store,
+    )
+    cfg = thread()
+
+    list(graph.stream({"messages": [HumanMessage("clear it")]}, cfg, stream_mode="updates"))
+    requested = audit_store.get_events(event_type=AuditEventType.CONFIRMATION_REQUESTED)
+    assert len(requested) == 1, "confirmation_requested should be logged once before interrupt()"
+
+    graph.invoke(Command(resume="yes"), cfg)
+
+    requested_after = audit_store.get_events(event_type=AuditEventType.CONFIRMATION_REQUESTED)
+    assert len(requested_after) == 1, (
+        "the interrupt()-triggered replay of confirm_and_run must not duplicate "
+        "confirmation_requested"
+    )
+
+    resolved = audit_store.get_events(event_type=AuditEventType.CONFIRMATION_RESOLVED)
+    assert len(resolved) == 1
+    assert resolved[0]["payload"]["confirmed"] is True
+
+    completed = audit_store.get_events(event_type=AuditEventType.TOOL_CALL_COMPLETED)
+    assert any(e["tool_name"] == "clear_document" for e in completed)
+
+
+def test_declined_confirmation_is_audited(monkeypatch, freecad, tmp_path):
+    audit_store = AuditStore(db_path=tmp_path / "audit.db")
+    graph, _ = make_graph(
+        monkeypatch,
+        [ai_tool("clear_document"), AIMessage("left it alone")],
+        audit_store=audit_store,
+    )
+    cfg = thread()
+
+    ask(graph, "clear it", cfg)
+    graph.invoke(Command(resume="no"), cfg)
+
+    resolved = audit_store.get_events(event_type=AuditEventType.CONFIRMATION_RESOLVED)
+    assert len(resolved) == 1
+    assert resolved[0]["payload"]["confirmed"] is False
+
+    started = audit_store.get_events(event_type=AuditEventType.TOOL_CALL_STARTED)
+    assert not any(e["tool_name"] == "clear_document" for e in started)
+
+
+def test_step_limit_halt_is_audited(monkeypatch, freecad, tmp_path):
+    monkeypatch.setattr(graph_module, "MAX_ITERATIONS", 2)
+    audit_store = AuditStore(db_path=tmp_path / "audit.db")
+    graph, _ = make_graph(
+        monkeypatch,
+        [ai_tool("list_objects"), ai_tool("list_objects")],
+        audit_store=audit_store,
+    )
+    ask(graph, "loop forever", thread())
+
+    halts = audit_store.get_events(event_type=AuditEventType.STEP_LIMIT_HALT)
+    assert len(halts) == 1
+    assert halts[0]["payload"]["max_iterations"] == 2
+    assert halts[0]["payload"]["skipped_tool_calls"]
+
+
+def test_chain_valid_after_full_graph_run(monkeypatch, freecad, tmp_path):
+    audit_store = AuditStore(db_path=tmp_path / "audit.db")
+    graph, _ = make_graph(
+        monkeypatch,
+        [
+            ai_tool("execute_script", code="add Box"),
+            ai_tool("get_screenshot"),
+            AIMessage("first turn done"),
+            ai_tool("clear_document"),
+            AIMessage("cleared"),
+        ],
+        audit_store=audit_store,
+    )
+    cfg = thread()
+
+    ask(graph, "build a box and screenshot it", cfg)
+    ask(graph, "clear it", cfg)
+    graph.invoke(Command(resume="yes"), cfg)
+
+    result = audit_store.verify_chain()
+    assert result.valid is True
+    assert result.checked > 0
+
+
+def test_audit_store_none_is_a_no_op(monkeypatch, freecad):
+    graph, _ = make_graph(monkeypatch, [ai_tool("execute_script", code="add Box"), AIMessage("done")])
+    state = ask(graph, "build", thread())
+    assert state["messages"][-1].content == "done"
 
 
 def test_post_tool_only_lists_objects_after_execute_script(monkeypatch, freecad):

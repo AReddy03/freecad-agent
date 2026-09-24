@@ -15,6 +15,7 @@ post_tool diffs the FreeCAD document after every execute_script batch and
 merges FeatureEntry dicts into state["feature_tree"].
 """
 
+import logging
 import os
 import sqlite3
 import threading
@@ -28,6 +29,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 
+from agent.audit import AuditEventType
 from agent.config import UserConfig
 from agent.history import steps_since_last_human, trim_history
 from agent.llm import get_llm
@@ -43,11 +45,14 @@ from agent.safety import confirmation_message, is_destructive
 from agent.state import AgentState, make_feature_entry
 from agent.tools import get_client, make_freecad_tools
 
+logger = logging.getLogger(__name__)
+
 CHECKPOINTS_PATH = Path(
     os.environ.get("CHECKPOINTS_DB") or Path(__file__).parent.parent / "checkpoints.db"
 )
 MAX_ITERATIONS = 20  # hard stop per user message to prevent infinite loops
 QUERY_CACHE_SIZE = 64  # per-query tutorial / matched-skill results kept per graph
+_ERROR_PREFIXES = ("FREECAD ERROR:", "CONNECTION ERROR:", "MEMORY ERROR:")
 
 # (thread_id, turn_index) pairs that already have a session summary, to avoid
 # duplicates. turn_index restarts at 0 in every thread, so it can't be the key alone.
@@ -127,6 +132,74 @@ def _with_screenshot(result: dict) -> dict:
     return {**result, "last_screenshot": screenshot} if screenshot else result
 
 
+def _thread_id(config: RunnableConfig) -> str:
+    return str(config.get("configurable", {}).get("thread_id", ""))
+
+
+def _tool_call_failed(msg: ToolMessage) -> bool:
+    """True if a ToolMessage represents a failed call (raised, or an error-prefixed result)."""
+    if getattr(msg, "status", None) == "error":
+        return True
+    return str(msg.content or "").startswith(_ERROR_PREFIXES)
+
+
+def _audit(audit_store, event: AuditEventType, thread_id: str, turn_index: int, once: bool = False, **kwargs) -> None:
+    """
+    Record one audit event, or nothing when auditing is disabled.
+
+    Audit-write failures are logged and swallowed: a CAD action the user asked
+    for is never blocked by a logging problem, matching how memory and skills
+    failures are handled in reason().
+    """
+    if audit_store is None:
+        return
+    try:
+        write = audit_store.record_once if once else audit_store.record
+        write(event, thread_id, turn_index, **kwargs)
+    except Exception:
+        logger.warning("audit: failed to record %s", event.value, exc_info=True)
+
+
+def _audit_batch(audit_store, thread_id: str, turn_index: int, entries: list[dict]) -> None:
+    """Record a batch of events in one transaction (one commit, not one per event)."""
+    if audit_store is None or not entries:
+        return
+    try:
+        audit_store.record_many(entries, thread_id, turn_index)
+    except Exception:
+        logger.warning("audit: failed to record a batch of %d event(s)", len(entries), exc_info=True)
+
+
+def _audit_started(audit_store, thread_id: str, turn_index: int, tool_calls: list[dict]) -> None:
+    """Record tool_call_started for every pending tool call."""
+    _audit_batch(audit_store, thread_id, turn_index, [
+        {
+            "event_type": AuditEventType.TOOL_CALL_STARTED,
+            "tool_name": tc["name"],
+            "tool_call_id": tc["id"],
+            "payload": {"args": tc["args"]},
+        }
+        for tc in tool_calls
+    ])
+
+
+def _audit_completed(audit_store, thread_id: str, turn_index: int, messages: list) -> None:
+    """Record tool_call_completed/failed for every ToolMessage in a batch."""
+    _audit_batch(audit_store, thread_id, turn_index, [
+        {
+            "event_type": (
+                AuditEventType.TOOL_CALL_FAILED if _tool_call_failed(msg)
+                else AuditEventType.TOOL_CALL_COMPLETED
+            ),
+            "tool_name": msg.name,
+            "tool_call_id": msg.tool_call_id,
+            "payload": {"result": str(msg.content or "")},
+        }
+        for msg in messages
+        if isinstance(msg, ToolMessage)
+    ])
+
+
 def _maybe_save_session_summary(memory_store, state, final_answer: str, thread_id: str) -> None:
     """
     Save a compact session summary to long-term memory when the agent
@@ -173,6 +246,7 @@ def build_graph(
     tutorial_retriever=None,
     memory_store=None,
     skills_registry=None,
+    audit_store=None,
     checkpointer=None,
 ):
     """
@@ -184,6 +258,7 @@ def build_graph(
         tutorial_retriever: optional retriever whose results are injected into the system prompt
         memory_store:       optional MemoryStore for cross-session memory
         skills_registry:    optional SkillsRegistry for CAD best-practice skills
+        audit_store:        optional AuditStore for a durable, hash-chained action log
         checkpointer:       defaults to the shared SQLite checkpointer
     """
     freecad_tools = make_freecad_tools(config, memory_store=memory_store, skills_registry=skills_registry)
@@ -221,7 +296,7 @@ def build_graph(
         """Ask the LLM what to do next, injecting memory, skills, tutorials, and feature tree."""
         # `config` here is LangGraph's per-run config (injected by parameter
         # name), not the UserConfig passed to build_graph.
-        thread_id = str(config.get("configurable", {}).get("thread_id", ""))
+        thread_id = _thread_id(config)
 
         history = [m for m in state["messages"] if not isinstance(m, SystemMessage)]
         feature_tree = state.get("feature_tree") or []
@@ -265,17 +340,28 @@ def build_graph(
             "turn_index": state.get("turn_index", 0) + 1,
         }
 
-    def run_tools(state: AgentState) -> dict:
+    def run_tools(state: AgentState, config: RunnableConfig) -> dict:
         """Execute safe tool calls and capture screenshots into state."""
-        return _with_screenshot(tool_node.invoke(state))
+        thread_id = _thread_id(config)
+        turn_index = state.get("turn_index", 0)
+        tool_calls = state["messages"][-1].tool_calls
 
-    def confirm_and_run(state: AgentState) -> dict:
+        _audit_started(audit_store, thread_id, turn_index, tool_calls)
+        result = _with_screenshot(tool_node.invoke(state))
+        _audit_completed(audit_store, thread_id, turn_index, result.get("messages", []))
+        return result
+
+    def confirm_and_run(state: AgentState, config: RunnableConfig) -> dict:
         """
         For destructive tool calls: pause via interrupt() until the caller resumes
         with Command(resume=<answer>), then run or cancel all pending tool calls.
         The node re-runs from the top on resume, so nothing before interrupt()
-        may have side effects.
+        may have side effects. confirmation_requested is logged via record_once(),
+        which durably dedupes by (thread_id, turn_index, tool_call_id, event_type)
+        so the top-of-function replay on resume never double-logs it.
         """
+        thread_id = _thread_id(config)
+        turn_index = state.get("turn_index", 0)
         tool_calls = state["messages"][-1].tool_calls
 
         # Find the first destructive call to build the confirmation prompt
@@ -284,15 +370,46 @@ def build_graph(
         )
         prompt = confirmation_message(destructive_tc["name"], destructive_tc["args"])
 
-        user_response = interrupt({"question": prompt})
+        _audit(
+            audit_store, AuditEventType.CONFIRMATION_REQUESTED, thread_id, turn_index, once=True,
+            tool_call_id=destructive_tc["id"], tool_name=destructive_tc["name"],
+            payload={"args": destructive_tc["args"], "prompt": prompt},
+        )
 
-        if str(user_response).strip().lower() in ("yes", "y"):
-            return _with_screenshot(tool_node.invoke(state))
+        user_response = interrupt({"question": prompt})
+        confirmed = str(user_response).strip().lower() in ("yes", "y")
+
+        _audit(
+            audit_store, AuditEventType.CONFIRMATION_RESOLVED, thread_id, turn_index,
+            tool_call_id=destructive_tc["id"], tool_name=destructive_tc["name"],
+            payload={
+                "response": str(user_response),
+                "confirmed": confirmed,
+                "batch_tool_call_ids": [tc["id"] for tc in tool_calls],
+            },
+        )
+
+        if confirmed:
+            _audit_started(audit_store, thread_id, turn_index, tool_calls)
+            result = _with_screenshot(tool_node.invoke(state))
+            _audit_completed(audit_store, thread_id, turn_index, result.get("messages", []))
+            return result
         return {"messages": _skipped_tool_results(tool_calls, "Action cancelled by user.")}
 
-    def halt(state: AgentState) -> dict:
+    def halt(state: AgentState, config: RunnableConfig) -> dict:
         """Step limit reached: answer the pending tool calls and tell the user."""
+        thread_id = _thread_id(config)
+        turn_index = state.get("turn_index", 0)
         tool_calls = state["messages"][-1].tool_calls
+
+        _audit(
+            audit_store, AuditEventType.STEP_LIMIT_HALT, thread_id, turn_index,
+            payload={
+                "max_iterations": MAX_ITERATIONS,
+                "skipped_tool_calls": [{"name": tc["name"], "id": tc["id"]} for tc in tool_calls],
+            },
+        )
+
         skipped = _skipped_tool_results(
             tool_calls, f"Not executed: step limit ({MAX_ITERATIONS}) reached."
         )

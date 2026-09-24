@@ -2,6 +2,14 @@
 Agent state definitions.
 
 Extracted from graph.py to avoid circular imports between graph.py and tools.py.
+
+AgentState is this agent's working-memory layer: low-latency, in-process
+conversational/short-term state threaded directly between LangGraph nodes
+(no I/O per step). It's bounded by agent/history.py::trim_history() and made
+durable/resumable across restarts by the SqliteSaver checkpointer in
+agent/graph.py::get_checkpointer() (checkpoints.db, keyed by thread_id). The
+separate transactional/audit layer — a durable, hash-chained log of every
+agent-driven action — lives in agent/audit.py.
 """
 
 from datetime import datetime, timezone
